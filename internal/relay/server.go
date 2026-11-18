@@ -28,11 +28,20 @@ const (
 	defaultPairTTL    = 10 * time.Minute
 	defaultSessionTTL = 90 * 24 * time.Hour
 	maxMessageBytes   = 8 << 20
+	maxRPCParamsBytes = 1 << 20
+	maxFileChunkBytes = 6 << 20
 	maxPendingPerPeer = 32
 	httpRPCTimeout    = 2 * time.Minute
 	pairAttemptLimit  = 10
 	pairAttemptWindow = 10 * time.Minute
 )
+
+func maxParamsBytesForMethod(method string) int64 {
+	if method == "files.chunk" {
+		return maxFileChunkBytes
+	}
+	return maxRPCParamsBytes
+}
 
 type Config struct {
 	DesktopToken   string
@@ -49,6 +58,7 @@ type Config struct {
 type Server struct {
 	cfg       Config
 	mux       *http.ServeMux
+	adminMux  *http.ServeMux
 	store     *sessionStore
 	tokens    *desktopTokenStore
 	mu        sync.Mutex
@@ -71,6 +81,7 @@ type peer struct {
 	sessionID string
 	tokenHash string
 	tokenID   string
+	scopes    []string
 	writeMu   sync.Mutex
 }
 
@@ -86,6 +97,7 @@ type pendingRoute struct {
 type pairRecord struct {
 	deviceID  string
 	expiresAt time.Time
+	scopes    []string
 }
 
 type attemptWindow struct {
@@ -142,20 +154,43 @@ func NewServer(cfg Config) (*Server, error) {
 	server.mux.HandleFunc(PathMobileConnect, server.handleMobile)
 	server.mux.HandleFunc(PathMobileRPC, server.handleMobileRPC)
 	server.mux.HandleFunc(PathPairClaim, server.handlePairClaim)
-	server.mux.HandleFunc(PathAdmin, server.handleAdmin)
-	server.mux.HandleFunc(PathAdmin+"/login", server.handleAdminLogin)
-	server.mux.HandleFunc(PathAdmin+"/logout", server.handleAdminLogout)
-	server.mux.HandleFunc(PathAdmin+"/api/state", server.handleAdminState)
-	server.mux.HandleFunc(PathAdmin+"/api/tokens", server.handleAdminTokens)
-	server.mux.HandleFunc(PathAdmin+"/api/tokens/", server.handleAdminTokenDelete)
+	server.adminMux = http.NewServeMux()
+	server.adminMux.HandleFunc(PathHealth, server.handleHealth)
+	server.adminMux.HandleFunc(PathAdmin, server.handleAdmin)
+	server.adminMux.HandleFunc(PathAdmin+"/login", server.handleAdminLogin)
+	server.adminMux.HandleFunc(PathAdmin+"/logout", server.handleAdminLogout)
+	server.adminMux.HandleFunc(PathAdmin+"/api/state", server.handleAdminState)
+	server.adminMux.HandleFunc(PathAdmin+"/api/tokens", server.handleAdminTokens)
+	server.adminMux.HandleFunc(PathAdmin+"/api/tokens/", server.handleAdminTokenAction)
 	return server, nil
 }
 
 func (s *Server) Handler() http.Handler {
+	return secureHeaders(s.mux, s.requestSecure)
+}
+
+func (s *Server) AdminHandler() http.Handler {
+	return secureHeaders(s.adminMux, s.requestSecure)
+}
+
+func (s *Server) CombinedHandler() http.Handler {
+	return secureHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == PathAdmin || strings.HasPrefix(r.URL.Path, PathAdmin+"/") {
+			s.adminMux.ServeHTTP(w, r)
+			return
+		}
+		s.mux.ServeHTTP(w, r)
+	}), s.requestSecure)
+}
+
+func secureHeaders(handler http.Handler, isSecure func(*http.Request) bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
-		s.mux.ServeHTTP(w, r)
+		if isSecure != nil && isSecure(r) {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		handler.ServeHTTP(w, r)
 	})
 }
 
@@ -182,16 +217,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	s.mu.Lock()
-	desktops := len(s.desktops)
-	mobiles := len(s.mobiles)
-	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":             true,
-		"service":        "codexlink-relay",
-		"activeDesktops": desktops,
-		"activeMobiles":  mobiles,
-		"time":           time.Now().UTC().Format(time.RFC3339),
+		"ok":      true,
+		"service": "codexlink-relay",
+		"time":    time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
@@ -200,14 +229,14 @@ func (s *Server) handleDesktop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	token, ok := s.tokens.Authenticate(bearerToken(r))
-	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
 	deviceID := strings.TrimSpace(r.URL.Query().Get("device"))
 	if !validDeviceID(deviceID) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid device id"})
+		return
+	}
+	token, authStatus, authError := s.authenticateDesktop(r, deviceID)
+	if authError != "" {
+		writeJSON(w, authStatus, map[string]string{"error": authError})
 		return
 	}
 	name := limitText(r.URL.Query().Get("name"), 80)
@@ -242,7 +271,8 @@ func (s *Server) handleDesktop(w http.ResponseWriter, r *http.Request) {
 				_ = desktop.send(r.Context(), Message{Type: MessageTypeError, Error: ErrorBadRequest})
 				continue
 			}
-			code, expires, err := s.createPairCode(deviceID)
+			scopes := normalizeMobileScopes(message.Scopes)
+			code, expires, err := s.createPairCode(deviceID, scopes)
 			if err != nil {
 				_ = desktop.send(r.Context(), Message{Type: MessageTypeError, RequestID: message.RequestID, Error: err.Error()})
 				continue
@@ -252,6 +282,7 @@ func (s *Server) handleDesktop(w http.ResponseWriter, r *http.Request) {
 				RequestID: message.RequestID,
 				Code:      code,
 				ExpiresAt: expires,
+				Scopes:    scopes,
 			})
 		case MessageTypeRPCResult:
 			s.routeRPCResult(desktop, message)
@@ -266,13 +297,13 @@ func (s *Server) handleDesktopSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if _, ok := s.tokens.Authenticate(bearerToken(r)); !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
 	deviceID := strings.TrimSpace(r.URL.Query().Get("device"))
 	if !validDeviceID(deviceID) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid device id"})
+		return
+	}
+	if _, status, authError := s.authenticateDesktop(r, deviceID); authError != "" {
+		writeJSON(w, status, map[string]string{"error": authError})
 		return
 	}
 	records := s.store.ListDevice(deviceID)
@@ -285,6 +316,7 @@ func (s *Server) handleDesktopSessions(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:  record.CreatedAt,
 			ExpiresAt:  record.ExpiresAt,
 			Active:     active[record.SessionID],
+			Scopes:     normalizeMobileScopes(record.Scopes),
 		})
 	}
 	writeJSON(w, http.StatusOK, MobileSessionList{
@@ -296,10 +328,6 @@ func (s *Server) handleDesktopSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDesktopRevoke(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	if _, ok := s.tokens.Authenticate(bearerToken(r)); !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<10))
@@ -316,6 +344,10 @@ func (s *Server) handleDesktopRevoke(w http.ResponseWriter, r *http.Request) {
 	request.SessionID = strings.TrimSpace(request.SessionID)
 	if !validDeviceID(request.DeviceID) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid device id"})
+		return
+	}
+	if _, status, authError := s.authenticateDesktop(r, request.DeviceID); authError != "" {
+		writeJSON(w, status, map[string]string{"error": authError})
 		return
 	}
 	if !request.All && !validSessionID(request.SessionID) {
@@ -365,6 +397,7 @@ func (s *Server) handleMobile(w http.ResponseWriter, r *http.Request) {
 		name:      record.DeviceName,
 		sessionID: record.SessionID,
 		tokenHash: hashToken(token),
+		scopes:    normalizeMobileScopes(record.Scopes),
 	}
 	s.registerMobile(mobile)
 	defer s.unregisterMobile(mobile)
@@ -374,6 +407,7 @@ func (s *Server) handleMobile(w http.ResponseWriter, r *http.Request) {
 		Type:       MessageTypeHello,
 		DeviceID:   record.DeviceID,
 		DeviceName: record.DeviceName,
+		Scopes:     mobile.scopes,
 	})
 
 	for {
@@ -386,11 +420,15 @@ func (s *Server) handleMobile(w http.ResponseWriter, r *http.Request) {
 			_ = mobile.send(r.Context(), rpcResultMessage(message.RequestID, false, nil, "unsupported mobile message"))
 			continue
 		}
-		if message.RequestID == "" || !allowedMobileMethods[message.Method] {
+		if message.RequestID == "" || !isAllowedMobileMethod(message.Method) {
 			_ = mobile.send(r.Context(), rpcResultMessage(message.RequestID, false, nil, ErrorMethodBlocked))
 			continue
 		}
-		if len(message.Params) > 1<<20 {
+		if !mobileMethodAllowed(message.Method, mobile.scopes) {
+			_ = mobile.send(r.Context(), rpcResultMessage(message.RequestID, false, nil, ErrorScopeDenied))
+			continue
+		}
+		if int64(len(message.Params)) > maxParamsBytesForMethod(message.Method) {
 			_ = mobile.send(r.Context(), rpcResultMessage(message.RequestID, false, nil, "request too large"))
 			continue
 		}
@@ -443,7 +481,7 @@ func (s *Server) handleMobileRPC(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "device mismatch"})
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, maxFileChunkBytes+(64<<10))
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": ErrorBadRequest})
@@ -458,11 +496,15 @@ func (s *Server) handleMobileRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.Method = strings.TrimSpace(request.Method)
-	if !allowedMobileMethods[request.Method] {
+	if !isAllowedMobileMethod(request.Method) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": ErrorMethodBlocked})
 		return
 	}
-	if len(request.Params) > 1<<20 {
+	if !mobileMethodAllowed(request.Method, record.Scopes) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": ErrorScopeDenied})
+		return
+	}
+	if int64(len(request.Params)) > maxParamsBytesForMethod(request.Method) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request too large"})
 		return
 	}
@@ -569,6 +611,7 @@ func (s *Server) handlePairClaim(w http.ResponseWriter, r *http.Request) {
 		DeviceName: limitText(request.Name, 80),
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 		ExpiresAt:  expires.Format(time.RFC3339),
+		Scopes:     normalizeMobileScopes(pair.scopes),
 	}
 	if err := s.store.Add(record); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not persist session"})
@@ -581,6 +624,7 @@ func (s *Server) handlePairClaim(w http.ResponseWriter, r *http.Request) {
 		DeviceID:   pair.deviceID,
 		DeviceName: record.DeviceName,
 		ExpiresAt:  record.ExpiresAt,
+		Scopes:     record.Scopes,
 	})
 }
 
@@ -712,7 +756,7 @@ func (s *Server) disconnectMobileSessions(deviceID string, records []sessionReco
 	}
 }
 
-func (s *Server) createPairCode(deviceID string) (string, string, error) {
+func (s *Server) createPairCode(deviceID string, scopes []string) (string, string, error) {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -735,7 +779,11 @@ func (s *Server) createPairCode(deviceID string) (string, string, error) {
 			continue
 		}
 		expires := now.Add(s.cfg.PairTTL)
-		s.pairs[code] = pairRecord{deviceID: deviceID, expiresAt: expires}
+		s.pairs[code] = pairRecord{
+			deviceID:  deviceID,
+			expiresAt: expires,
+			scopes:    normalizeMobileScopes(scopes),
+		}
 		return code, expires.UTC().Format(time.RFC3339), nil
 	}
 	return "", "", errors.New("could not allocate pairing code")
@@ -861,6 +909,21 @@ func bearerToken(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(value[7:])
+}
+
+func (s *Server) authenticateDesktop(r *http.Request, deviceID string) (desktopTokenRecord, int, string) {
+	record, err := s.tokens.AuthenticateDevice(bearerToken(r), deviceID)
+	switch {
+	case err == nil:
+		return record, http.StatusOK, ""
+	case errors.Is(err, errDesktopDeviceUsed):
+		return desktopTokenRecord{}, http.StatusForbidden, ErrorDeviceMismatch
+	case errors.Is(err, errTokenNotFound):
+		return desktopTokenRecord{}, http.StatusUnauthorized, ErrorUnauthorized
+	default:
+		s.cfg.Logger.Printf("desktop token device binding failed device=%s err=%v", deviceID, err)
+		return desktopTokenRecord{}, http.StatusInternalServerError, "token_binding_failed"
+	}
 }
 
 func secureEqual(got, want string) bool {

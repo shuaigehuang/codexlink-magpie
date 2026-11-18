@@ -1,6 +1,6 @@
 # CodexLink
 
-[![CI](https://github.com/shuaigehuang/codexlink/actions/workflows/ci.yml/badge.svg)](https://github.com/shuaigehuang/codexlink/actions/workflows/ci.yml)
+[![CI](https://github.com/shuaigehuang/codexlink-magpie/actions/workflows/ci.yml/badge.svg)](https://github.com/shuaigehuang/codexlink-magpie/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 用手机远程连接自己电脑上的 **Codex**，并通过 **Magpie** 管理模型路由和网关密钥。
@@ -12,6 +12,7 @@ CodexLink 由三部分组成：Windows 电脑端、Android 手机端，以及部
 ## 功能
 
 - **远程下达指令**：手机可以在电脑已有会话中继续对话；电脑正在执行任务时，指令会排队并使用同一会话继续，不会另开新会话或中断当前任务。
+- **手机文件上传**：在会话输入框选择系统文件，文件会分块经过中继传到电脑，保存到 `下载\CodexLink`，并可把保存路径带入当前会话继续处理。
 - **查看历史会话**：读取电脑上 Codex 的真实会话、轮次、消息和命令记录。
 - **实时同步回复与思考**：电脑端生成回复或思考时，手机端约每 0.5 秒增量同步一次；思考完成后自动折叠，无需退出会话再重新进入。
 - **Magpie 管理**：查看 Provider、余额、网关密钥，创建/轮换/启停/删除密钥。
@@ -19,6 +20,7 @@ CodexLink 由三部分组成：Windows 电脑端、Android 手机端，以及部
 - **手机令牌管理**：电脑端可查看在线状态、授权时间、到期时间，并单个或全部撤销。
 - **服务器管理后台**：在服务器网页中增删电脑端接入令牌、查看在线设备与可用连接地址。
 - **自动重连**：电脑端关闭窗口后默认隐藏到系统托盘，保持与中继的连接。
+- **标准 Windows 安装包**：可选择安装目录，自动创建开始菜单和桌面快捷方式，并可在 Windows“设置 → 应用”中卸载。
 - **本地密钥保护**：电脑端配置使用 Windows DPAPI 加密；手机令牌保存在系统安全存储。
 - **命令输出折叠**：手机端默认折叠长命令输出，只显示可展开的命令摘要。
 - **快速回到底部**：长会话新增“回到底部”按钮，打开会话自动定位到最新消息。
@@ -50,7 +52,15 @@ sudo bash ./install.sh --domain relay.example.com --email you@example.com
 
 安装完成后保存终端输出的**中继地址**和**电脑端密钥**。密钥只显示一次。
 安装脚本还会生成服务器管理密码，保存在 `/etc/codexlink-relay.env`；打开
-`https://relay.example.com/admin` 即可进入管理后台。
+安装结束输出的 `管理面板地址` 即可进入管理后台。
+
+在终端中直接运行安装脚本时，脚本会依次询问两个端口：
+
+- **Web 管理面板登录端口**：只用于服务器后台登录、查看在线设备和增删电脑端令牌。
+- **电脑/手机中转服务端口**：只用于电脑端和手机端的连接与消息转发。
+
+两个端口必须不同。脚本会自动检查占用、写入防火墙规则，并在最后打印准确的访问地址。
+服务器安全组也要分别放行这两个端口。
 
 没有域名时可以临时使用公网 IP：
 
@@ -59,6 +69,7 @@ sudo bash ./install.sh --http-public YOUR_SERVER_IP
 ```
 
 该模式使用明文 HTTP/WS，仅建议临时测试。正式使用请改用 `--domain` 启用自动 HTTPS。
+默认管理面板端口为 `8080`，例如后台地址是 `http://YOUR_SERVER_IP:8080/admin`。
 
 如果暂时不申请 SSL 证书，但需要同时开放 80 和 443：
 
@@ -68,13 +79,17 @@ sudo bash ./install.sh --http-dual YOUR_SERVER_IP
 
 该模式下 `http://YOUR_SERVER_IP` 和 `http://YOUR_SERVER_IP:443` 都是明文 HTTP，
 `443` **不是 HTTPS**。管理密码、电脑端令牌和对话内容都可能被中间人截获，仅适合临时使用。
+管理面板默认使用独立端口 `8080`，不会与两个中继端口混用。
 
 ### 2. 启动电脑端
 
-1. 安装并启动 Codex 桌面版。
-2. 启动 Magpie，确认 `magpie.com` 可在本机运行。
-3. 打开 CodexLink，进入“设备配对”，填写中继地址和电脑端密钥。
-4. 连接成功后点击“生成配对码”。
+1. 运行 `CodexLink-Setup-<版本>.exe`，选择安装目录并完成安装。
+2. 安装并启动 Codex 桌面版。
+3. 启动 Magpie，确认 `magpie.com` 可在本机运行。
+4. 打开 CodexLink，进入“设备配对”，填写中继地址和电脑端密钥。
+5. 连接成功后点击“生成配对码”。
+
+卸载时先从系统托盘菜单选择“退出并断开”，再打开 Windows“设置 → 应用 → 已安装的应用”，找到 CodexLink 后点击“卸载”。
 
 电脑端会自动查找 Codex：
 
@@ -94,11 +109,11 @@ sudo bash ./install.sh --http-dual YOUR_SERVER_IP
 
 ## 下载
 
-构建产物发布在 [GitHub Releases](https://github.com/shuaigehuang/codexlink/releases)：
+构建产物发布在 [GitHub Releases](https://github.com/shuaigehuang/codexlink-magpie/releases)：
 
 | 文件 | 说明 |
 | --- | --- |
-| `CodexLink.exe` | Windows 10/11 电脑端 |
+| `CodexLink-Setup-<版本>.exe` | Windows 10/11 电脑端安装包，可选择安装目录并支持控制面板卸载 |
 | `codexlink-mobile.apk` | Android 手机端 |
 | `codexlink-relay-linux-amd64.tar.gz` | x86_64 Linux 中继安装包 |
 | `codexlink-relay-linux-arm64.tar.gz` | ARM64 Linux 中继安装包 |
@@ -117,6 +132,7 @@ sudo bash ./install.sh --http-dual YOUR_SERVER_IP
 | Flutter | 支持 Dart 3.14+ 的稳定版 |
 | Android SDK | API 35+，含 Build Tools 和 CMake |
 | Wails 3 | 3.1+ |
+| NSIS | 3.13+，构建 Windows 安装包 |
 | Linux 中继 | systemd、curl，可选域名和 80/443 端口 |
 
 ### 电脑端
@@ -128,6 +144,18 @@ wails3 build
 ```
 
 产物位于 `apps/desktop/CodexLink/bin/`。
+
+生成可选择安装目录、带控制面板卸载功能的 Windows 安装包：
+
+```powershell
+pwsh ./deploy/build-windows-installer.ps1
+```
+
+安装包输出到 `dist/CodexLink-Setup-<版本>.exe`。构建环境需要 Node.js、Wails 3 和 NSIS 3.x。
+
+正式发布必须使用 Authenticode 证书签名。构建时设置 `CODEXLINK_SIGN_PFX` +
+`CODEXLINK_SIGN_PFX_PASSWORD`，或设置证书指纹 `CODEXLINK_SIGN_CERT_SHA1`。发布流水线应同时设置
+`CODEXLINK_REQUIRE_SIGNATURE=1`，这样没有可用证书时会直接构建失败，而不是静默产出未签名安装包。
 
 只构建前端：
 
@@ -155,6 +183,9 @@ flutter build apk --release
 ```
 
 产物位于 `apps/mobile/build/app/outputs/flutter-apk/app-release.apk`。
+Release 构建必须配置正式签名（`android/key.properties` 或 `CODEXLINK_ANDROID_*` 环境变量），
+未签名时会直接失败。HTTP 明文模式仍可使用，App 会显示未加密风险提示；
+正式使用请为中继配置域名和 HTTPS。
 
 ### 中继
 
@@ -174,11 +205,12 @@ pwsh ./deploy/build-package.ps1 -Arch all
 | `CODEXLINK_RELAY_ADMIN_TOKEN` | 空 | 服务器管理后台密码，至少 32 字符；为空时关闭管理后台 |
 | `CODEXLINK_RELAY_PUBLIC_URLS` | 空 | 管理后台展示的公开地址，逗号分隔 |
 | `CODEXLINK_RELAY_DATA_DIR` | `./data` | 会话和证书缓存目录 |
-| `CODEXLINK_RELAY_LISTEN` | `127.0.0.1:8787` | 监听地址 |
+| `CODEXLINK_RELAY_LISTEN` | `127.0.0.1:8787` | 电脑/手机中转服务监听地址 |
+| `CODEXLINK_RELAY_ADMIN_LISTEN` | 空 | Web 管理面板独立监听地址；为空时兼容旧版，与中转共用端口 |
 | `CODEXLINK_RELAY_EXTRA_HTTP_ADDR` | 空 | 额外明文 HTTP 监听地址，例如 `:443` |
 | `CODEXLINK_RELAY_PAIR_TTL` | `10m` | 配对码有效期 |
 | `CODEXLINK_RELAY_SESSION_TTL` | `2160h` | 手机令牌有效期，默认 90 天 |
-| `CODEXLINK_RELAY_TRUST_PROXY` | `false` | 是否信任 `X-Forwarded-For` |
+| `CODEXLINK_RELAY_TRUST_PROXY` | `false` | 是否信任反向代理写入的 `X-Forwarded-For` / `X-Forwarded-Proto`；仅在本机反向代理会覆盖这些头时启用，否则客户端可伪造 |
 | `CODEXLINK_RELAY_ORIGINS` | 空 | 允许的 WebSocket Origin，逗号分隔 |
 | `CODEXLINK_RELAY_TLS_DOMAIN` | 空 | 启用自动 HTTPS 的域名 |
 | `CODEXLINK_RELAY_TLS_EMAIL` | 空 | Let's Encrypt 通知邮箱 |
@@ -190,8 +222,16 @@ pwsh ./deploy/build-package.ps1 -Arch all
 # 自动 HTTPS，推荐
 sudo bash ./install.sh --domain relay.example.com --email you@example.com
 
+# 非交互指定两个端口
+sudo bash ./install.sh --domain relay.example.com --email you@example.com \
+  --relay-port 443 --admin-port 8443
+
 # 公网 IP 明文 HTTP，仅测试
 sudo bash ./install.sh --http-public YOUR_SERVER_IP
+
+# 公网 IP 明文 HTTP，并指定两个端口
+sudo bash ./install.sh --http-public YOUR_SERVER_IP \
+  --relay-port 8787 --admin-port 8080
 
 # 80 和 443 都提供明文 HTTP，不申请 SSL 证书
 sudo bash ./install.sh --http-dual YOUR_SERVER_IP
@@ -200,13 +240,18 @@ sudo bash ./install.sh --http-dual YOUR_SERVER_IP
 sudo bash ./install.sh --http-only
 ```
 
+自动化部署可加 `--yes` 跳过询问并使用默认端口。再次运行安装脚本时，默认值会优先沿用
+`/etc/codexlink-relay.env` 中已有的两个端口。管理面板端口和中转端口必须不同。
+
 ## 服务器管理后台
 
 安装时脚本会生成独立的管理密码。打开：
 
 ```text
-https://relay.example.com/admin
+https://relay.example.com:8443/admin
 ```
+实际地址以安装结束输出为准。管理面板的端口与中转服务端口完全独立；访问中转端口上的
+`/admin` 会返回 404，不会暴露登录页。
 
 后台支持：
 
@@ -239,19 +284,36 @@ curl https://relay.example.com/healthz
 | `POST /v1/pair/claim` | 手机领取一次性配对码 |
 | `GET /v1/mobile/connect` | 手机 WebSocket RPC 通道 |
 | `POST /v1/mobile/rpc` | 手机 HTTP RPC 通道 |
-| `GET /admin` | 服务器管理后台登录页 |
-| `POST /admin/login` | 管理员登录 |
-| `GET /admin/api/state` | 令牌、在线设备和公开地址状态 |
-| `POST /admin/api/tokens` | 生成电脑端令牌 |
-| `DELETE /admin/api/tokens/{id}` | 删除电脑端令牌 |
+| `GET /admin` | 服务器管理后台登录页（仅管理面板端口） |
+| `POST /admin/login` | 管理员登录（仅管理面板端口） |
+| `GET /admin/api/state` | 令牌、在线设备和公开地址状态（仅管理面板端口） |
+| `POST /admin/api/tokens` | 生成电脑端令牌（仅管理面板端口） |
+| `DELETE /admin/api/tokens/{id}` | 删除电脑端令牌（仅管理面板端口） |
 
-手机只能调用中继白名单中的方法，包括 `ping`、`node.status`、`threads.list`、`threads.read`、`threads.send`、`magpie.status` 和 Magpie 管理方法。
+手机只能调用中继白名单中的方法，并按令牌权限分级授权：
+
+| 权限 | 允许的操作 |
+| --- | --- |
+| `read` | 查看会话、命令记录、Magpie 状态；所有手机令牌都默认包含 |
+| `chat` | 在已有会话中发送指令 |
+| `files` | 上传文件到电脑 |
+| `magpie-admin` | 初始化 Magpie 管理、创建/轮换/启停/删除网关密钥 |
+
+新配对默认只授予 `read`。发送指令、上传文件和 Magpie 管理必须在电脑端配对时显式勾选。
+升级后旧的手机令牌会自动降为只读，需要重新配对才能恢复写权限。
+
+手机文件上传按 `4 MB` 分块，单文件最多 `100 MB`。中继只转发分块，不在服务器磁盘持久化文件；电脑端校验分块顺序和完整大小后写入 `下载\CodexLink`。HTTP 明文模式下文件内容同样没有加密保护。
 
 - 中继只持久化手机令牌的 SHA-256 哈希，不保存令牌原文。
 - 电脑端令牌只保存 SHA-256 哈希，完整值仅在创建时显示一次。
+- 每个电脑端令牌首次连接时会绑定一台电脑设备；其他设备使用同一令牌会收到 `403 device_mismatch`。管理后台可查看绑定设备并解除绑定。
+- 更换 `CODEXLINK_RELAY_DESKTOP_TOKEN` 后，中继会自动替换安装令牌并清除旧绑定，旧密钥立即失效。
 - 电脑端密钥只保存在电脑本地，使用 Windows DPAPI 加密。
 - 手机令牌只保存在 Android 安全存储。
 - Magpie Provider Key 和网关密钥不会写入日志；完整密钥只在创建或轮换时返回一次。
+- 中继只允许访问本机回环地址或本机网卡地址的 Magpie 管理 API，并禁用 HTTP 代理和重定向，避免管理密钥被转发到外部主机。
+- 域名 HTTPS 模式下，80 端口只处理 ACME 验证和 308 跳转到 HTTPS，不会回落到明文 RPC；HTTPS 响应带 HSTS。
+- `/healthz` 只返回健康状态，不暴露在线设备数量。
 - HTTP 模式不具备机密性和完整性保护，请勿在公共 Wi-Fi 下使用。
 - `--http-dual` 的 443 端口仍是 HTTP 明文，不是 HTTPS；不要因为端口号是 443 就认为连接已加密。
 
@@ -285,7 +347,7 @@ tools                    开发和协议探测工具
 
 1. 电脑端“设备配对”页是否显示中继已连接。
 2. 手机填写的中继地址是否与电脑端完全一致。
-3. 服务器安全组是否放行 80/443，系统防火墙是否放行对应端口。
+3. 服务器安全组是否放行安装时选择的管理面板端口和中转服务端口。
 4. HTTPS 证书是否有效；HTTP 模式是否被网络环境拦截。
 5. 中继日志：`journalctl -u codexlink-relay -f`。
 
@@ -305,9 +367,16 @@ go vet ./...
 cd apps/desktop/CodexLink && go test ./... -count=1 && go vet ./...
 cd apps/desktop/CodexLink/frontend && npm ci && npm run build
 cd apps/mobile && flutter analyze && flutter test
+
+go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+govulncheck ./...
+(cd apps/desktop/CodexLink && govulncheck ./...)
+
+go run ./tools/sbom -dir . -output dist/sbom-core.json -name codexlink
 ```
 
-CI 会执行相同的构建和测试。协议验证记录见 `docs/step-01` 至 `docs/step-06`。
+CI 会执行相同的构建、测试、`govulncheck`、密钥扫描（gitleaks）并生成 CycloneDX SBOM。
+协议验证记录见 `docs/step-01` 至 `docs/step-06`。
 
 ## 贡献
 

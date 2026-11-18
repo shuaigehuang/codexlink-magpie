@@ -6,8 +6,9 @@
     <meta name="theme-color" content="#090b12"/>
     <link rel="icon" type="image/svg+xml" href="/codexlink.svg"/>
     <link rel="stylesheet" href="/style.css"/>
+    <link rel="stylesheet" href="/security.css"/>
     <title>CodexLink</title>
-  <script type="module" crossorigin src="/assets/index-D9-Q4Kmh.js"></script>
+  <script type="module" crossorigin src="/assets/index-KYSHmoKe.js"></script>
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true">
@@ -315,6 +316,25 @@
                             <div class="pairing-copy">
                                 <h4>扫码连接这台电脑</h4>
                                 <p>配对码 10 分钟内有效，领取一次后立即失效。手机扫码后即可查看历史、发送指令和读取 Magpie 状态。</p>
+                                <div class="pairing-scopes" role="group" aria-label="手机权限">
+                                    <div class="pairing-scopes-title">手机权限 <span>默认只授予查看权限</span></div>
+                                    <label class="scope-option scope-fixed">
+                                        <input id="scope-read" type="checkbox" checked disabled>
+                                        <span><b>查看会话</b><small>读取历史会话、思考过程和 Magpie 状态</small></span>
+                                    </label>
+                                    <label class="scope-option">
+                                        <input id="scope-chat" type="checkbox">
+                                        <span><b>发送指令</b><small>可在现有 Codex 会话中继续发送消息</small></span>
+                                    </label>
+                                    <label class="scope-option">
+                                        <input id="scope-files" type="checkbox">
+                                        <span><b>上传文件</b><small>允许手机通过中继向电脑上传文件</small></span>
+                                    </label>
+                                    <label class="scope-option">
+                                        <input id="scope-magpie" type="checkbox">
+                                        <span><b>管理 Magpie</b><small>创建、轮换、停用和删除 Magpie 密钥</small></span>
+                                    </label>
+                                </div>
                                 <div class="pairing-code-line">
                                     <span>配对码</span>
                                     <strong id="pairing-code">— — — —</strong>

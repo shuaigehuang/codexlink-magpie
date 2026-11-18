@@ -41,6 +41,10 @@ node.status
 threads.list
 threads.read
 threads.send
+files.begin
+files.chunk
+files.finish
+files.cancel
 magpie.status
 magpie.admin.status
 magpie.admin.initialize
@@ -51,6 +55,42 @@ magpie.keys.delete
 ```
 
 新增能力时必须同时修改中继白名单和电脑端分发逻辑，避免手机获得任意方法调用能力。
+
+文件上传使用四个方法完成：`files.begin` 声明文件名和大小，`files.chunk` 按顺序发送
+Base64 分块（每块最多 4 MB），`files.finish` 校验完整性并落盘，`files.cancel` 清理
+未完成的上传。单文件上限 100 MB。中继只转发分块，不在服务器持久化文件；电脑端保存到
+用户下载目录下的 `CodexLink` 文件夹，并清洗客户端提供的文件名。
+
+### 手机令牌权限
+
+手机令牌按最小权限分级，服务端在 WebSocket 和 HTTP RPC 两条通道上都会校验：
+
+| 权限 | 方法 |
+| --- | --- |
+| `read` | `ping`、`node.status`、`threads.list`、`threads.read`、`magpie.status`、`magpie.admin.status` |
+| `chat` | `threads.send` |
+| `files` | `files.begin`、`files.chunk`、`files.finish`、`files.cancel` |
+| `magpie-admin` | `magpie.admin.initialize`、`magpie.keys.create`、`magpie.keys.rotate`、`magpie.keys.toggle`、`magpie.keys.delete` |
+
+`read` 会始终包含在令牌中。新配对默认只授予 `read`，电脑端配对页必须显式勾选写权限。
+旧版本创建的手机令牌在升级后自动迁移为只读，避免历史令牌保留过大的权限。
+
+### 电脑端令牌与设备绑定
+
+电脑端令牌首次成功连接时会原子绑定设备 ID。之后其他设备使用同一令牌会收到
+`403 device_mismatch`，必须由管理后台解除绑定或重新签发令牌。更换
+`CODEXLINK_RELAY_DESKTOP_TOKEN` 时，中继会自动替换安装令牌并清除旧绑定，
+旧密钥立即失效。
+
+### 传输层加固
+
+- 域名 HTTPS 模式下，TCP 80 只处理 ACME HTTP-01 验证和 308 跳转到 HTTPS，
+  其他请求不会回落到明文 RPC。
+- HTTPS 响应设置 HSTS。只有显式设置 `CODEXLINK_RELAY_TRUST_PROXY=true` 时才信任
+  `X-Forwarded-Proto`，避免伪造协议头绕过安全 Cookie 判断。该选项只应在反向代理
+  会覆盖客户端请求头的部署中启用；中继直接暴露时保持默认 `false`。
+- `/healthz` 只返回健康状态，不暴露在线设备数量。
+- 管理后台的 Cookie、安全警告和跳转地址统一使用同一套 HTTPS 判断。
 
 ## 会话存储
 
@@ -83,6 +123,8 @@ sudo bash ./install.sh --domain relay.example.com --email you@example.com
 ```
 
 需要域名已解析到服务器，并放行 TCP 80/443。中继使用 ACME 自动申请和续期证书，最低 TLS 1.2。
+交互安装会分别询问 Web 管理面板端口和中转服务端口，常见配置是管理面板 `8443`、
+中转服务 `443`。两个端口都会使用同一张自动申请的域名证书；TCP 80 仍只用于证书验证和跳转。
 
 ### 公网 IP 明文（仅测试）
 
@@ -90,7 +132,9 @@ sudo bash ./install.sh --domain relay.example.com --email you@example.com
 sudo bash ./install.sh --http-public YOUR_SERVER_IP
 ```
 
-该模式直接监听 TCP 80，不提供加密。电脑端密钥、会话内容、指令和 Magpie 管理结果都可能被中间人截获。不要在生产环境或公共 Wi-Fi 下使用。
+该模式默认在中转服务端口 TCP 80 和 Web 管理面板端口 TCP 8080 上提供明文 HTTP，
+不提供加密。电脑端密钥、管理密码、会话内容、指令和 Magpie 管理结果都可能被中间人截获。
+不要在生产环境或公共 Wi-Fi 下使用。
 
 ### 本机反向代理
 
@@ -98,7 +142,8 @@ sudo bash ./install.sh --http-public YOUR_SERVER_IP
 sudo bash ./install.sh --http-only
 ```
 
-中继只监听 `127.0.0.1:8787`，由 Nginx/Caddy 或 SSH 隧道对外提供 HTTPS。参考 `deploy/Caddyfile.example`。
+中继默认监听 `127.0.0.1:8787`，管理面板默认监听 `127.0.0.1:8080`，
+由 Nginx/Caddy 或 SSH 隧道对外提供 HTTPS。参考 `deploy/Caddyfile.example`。
 
 ## 环境变量
 
@@ -106,10 +151,11 @@ sudo bash ./install.sh --http-only
 | --- | --- | --- |
 | `CODEXLINK_RELAY_DESKTOP_TOKEN` | 无 | 电脑端密钥，至少 32 字符 |
 | `CODEXLINK_RELAY_DATA_DIR` | `./data` | 数据目录 |
-| `CODEXLINK_RELAY_LISTEN` | `127.0.0.1:8787` | 监听地址 |
+| `CODEXLINK_RELAY_LISTEN` | `127.0.0.1:8787` | 电脑/手机中转服务监听地址 |
+| `CODEXLINK_RELAY_ADMIN_LISTEN` | 空 | Web 管理面板独立监听地址；留空时与中转共用端口 |
 | `CODEXLINK_RELAY_PAIR_TTL` | `10m` | 配对码有效期 |
 | `CODEXLINK_RELAY_SESSION_TTL` | `2160h` | 手机令牌有效期 |
-| `CODEXLINK_RELAY_TRUST_PROXY` | `false` | 是否信任反向代理的客户端 IP |
+| `CODEXLINK_RELAY_TRUST_PROXY` | `false` | 是否信任反向代理写入的客户端 IP 和协议头；仅限受信任代理 |
 | `CODEXLINK_RELAY_ORIGINS` | 空 | 允许的 WebSocket Origin |
 | `CODEXLINK_RELAY_TLS_DOMAIN` | 空 | 自动 HTTPS 域名 |
 | `CODEXLINK_RELAY_TLS_EMAIL` | 空 | ACME 邮箱 |
@@ -149,3 +195,4 @@ journalctl -u codexlink-relay -f
 ```
 
 升级时重新解压安装包并执行 `install.sh`。脚本会保留现有 `/etc/codexlink-relay.env` 中的电脑端密钥，并强制重启服务，避免旧进程继续运行。
+升级后安装脚本会提示两个端口；直接回车会优先沿用当前环境文件中的端口。中转端口和管理面板端口不能相同。

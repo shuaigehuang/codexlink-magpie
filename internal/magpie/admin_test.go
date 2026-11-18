@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -123,5 +124,35 @@ aaaaaaaaaaaaaaaaaaaaaaaa  Other`
 	id, ok := findGatewayKeyID(output, AdminKeyName)
 	if !ok || id != "38ae1bd366e74772dec237bb" {
 		t.Fatalf("id = %q, ok = %v", id, ok)
+	}
+}
+
+func TestAdminClientRejectsNonLocalGateway(t *testing.T) {
+	client := NewAdminClient("https://example.com", "sk-magpie-key-test-admin")
+	if _, err := client.Providers(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "只允许连接本机地址") {
+		t.Fatalf("non-local Magpie gateway error = %v", err)
+	}
+}
+
+func TestAdminClientDoesNotFollowRedirects(t *testing.T) {
+	var targetHit atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit.Store(true)
+		io.WriteString(w, `{"providers":[]}`)
+	}))
+	defer target.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	client := NewAdminClient(source.URL, "sk-magpie-key-test-admin")
+	if _, err := client.Providers(context.Background()); err == nil {
+		t.Fatal("Magpie admin redirect was followed")
+	}
+	if targetHit.Load() {
+		t.Fatal("Magpie admin secret was sent to a redirect target")
 	}
 }

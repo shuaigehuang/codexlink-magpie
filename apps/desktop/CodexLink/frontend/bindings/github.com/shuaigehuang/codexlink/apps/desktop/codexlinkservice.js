@@ -22,10 +22,11 @@ export function CreateMagpieKey(name, readOnly) {
 }
 
 /**
+ * @param {string[]} scopes
  * @returns {$CancellablePromise<$models.RelayPairing>}
  */
-export function CreateRelayPairing() {
-    return $Call.ByID(3355107929).then(/** @type {($result: any) => any} */(($result) => {
+export function CreateRelayPairing(scopes) {
+    return $Call.ByID(3355107929, scopes).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType1($result);
     }));
 }

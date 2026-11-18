@@ -30,18 +30,20 @@ const (
 )
 
 type RelayPairing struct {
-	Code      string `json:"code"`
-	ExpiresAt string `json:"expiresAt"`
-	Link      string `json:"link"`
-	QRDataURL string `json:"qrDataUrl"`
+	Code      string   `json:"code"`
+	ExpiresAt string   `json:"expiresAt"`
+	Link      string   `json:"link"`
+	QRDataURL string   `json:"qrDataUrl"`
+	Scopes    []string `json:"scopes"`
 }
 
 type RelaySession struct {
-	ID         string `json:"id"`
-	DeviceName string `json:"deviceName,omitempty"`
-	CreatedAt  string `json:"createdAt,omitempty"`
-	ExpiresAt  string `json:"expiresAt"`
-	Active     bool   `json:"active"`
+	ID         string   `json:"id"`
+	DeviceName string   `json:"deviceName,omitempty"`
+	CreatedAt  string   `json:"createdAt,omitempty"`
+	ExpiresAt  string   `json:"expiresAt"`
+	Active     bool     `json:"active"`
+	Scopes     []string `json:"scopes"`
 }
 
 type RelaySessionList struct {
@@ -394,6 +396,8 @@ func (s *CodexLinkService) dispatchRelayRPC(ctx context.Context, method string, 
 			return nil, errors.New("发送参数无效")
 		}
 		return s.SendMessage(ctx, strings.TrimSpace(input.ThreadID), input.Text)
+	case "files.begin", "files.chunk", "files.finish", "files.cancel":
+		return s.dispatchFileUploadRPC(method, params)
 	case "magpie.status":
 		s.opMu.Lock()
 		defer s.opMu.Unlock()
@@ -804,7 +808,7 @@ func (s *CodexLinkService) applyRelaySessionCount(count int) {
 	}
 }
 
-func (s *CodexLinkService) CreateRelayPairing(ctx context.Context) (RelayPairing, error) {
+func (s *CodexLinkService) CreateRelayPairing(ctx context.Context, scopes []string) (RelayPairing, error) {
 	s.relayMu.Lock()
 	if !s.relayConfigured || s.relayConn == nil || !s.relayStatus.Connected {
 		s.relayMu.Unlock()
@@ -826,6 +830,7 @@ func (s *CodexLinkService) CreateRelayPairing(ctx context.Context) (RelayPairing
 	err := session.send(sendCtx, relayproto.Message{
 		Type:      relayproto.MessageTypePair,
 		RequestID: requestID,
+		Scopes:    scopes,
 	})
 	cancel()
 	if err != nil {
@@ -864,6 +869,7 @@ func (s *CodexLinkService) CreateRelayPairing(ctx context.Context) (RelayPairing
 			ExpiresAt: message.ExpiresAt,
 			Link:      link,
 			QRDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
+			Scopes:    message.Scopes,
 		}, nil
 	case <-ctx.Done():
 		s.clearPairRequest(requestID)

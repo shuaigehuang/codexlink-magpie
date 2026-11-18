@@ -1228,6 +1228,7 @@ function renderAuthorizedSessions() {
         meta.append(node("span", "", `授权 ${formatAuthorizedTime(session.createdAt)}`));
         meta.append(node("span", "", `到期 ${formatAuthorizedTime(session.expiresAt)}`));
         meta.append(node("span", "authorized-id", `ID ${shortSessionID(session.id)}`));
+        meta.append(node("span", "authorized-scopes", `权限 ${scopeLabels(session.scopes)}`));
         main.append(title, meta);
 
         const revoke = node("button", "button authorized-revoke",
@@ -1252,6 +1253,17 @@ function renderAuthorizedSessions() {
     const error = $("#authorized-error");
     error.hidden = !state.authorizedError;
     error.textContent = state.authorizedError || "";
+}
+
+function scopeLabels(scopes) {
+    const labels = {
+        read: "查看",
+        chat: "发送",
+        files: "上传文件",
+        "magpie-admin": "Magpie 管理",
+    };
+    const values = Array.isArray(scopes) ? scopes.map((scope) => labels[scope] || scope) : [];
+    return values.length ? values.join(" · ") : "仅查看";
 }
 
 function formatAuthorizedTime(value) {
@@ -1399,13 +1411,21 @@ function updatePairingCountdown() {
     meta.textContent = `配对码剩余 ${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}，领取一次后立即失效。`;
 }
 
+function selectedPairingScopes() {
+    const scopes = ["read"];
+    if ($("#scope-chat")?.checked) scopes.push("chat");
+    if ($("#scope-files")?.checked) scopes.push("files");
+    if ($("#scope-magpie")?.checked) scopes.push("magpie-admin");
+    return scopes;
+}
+
 async function generatePairing() {
     if (state.pairingBusy) return;
     state.pairingBusy = true;
     $("#generate-pairing").disabled = true;
     $("#generate-pairing").textContent = "生成中…";
     try {
-        const pairing = await CodexLinkService.CreateRelayPairing();
+        const pairing = await CodexLinkService.CreateRelayPairing(selectedPairingScopes());
         showPairing(pairing);
         showToast("配对码已生成，请在 10 分钟内扫码", "success");
     } catch (error) {

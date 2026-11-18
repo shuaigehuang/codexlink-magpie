@@ -2,6 +2,39 @@
 
 所有重要变更记录在此文件。版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+## [1.1.0] - 2026-11-18
+
+### Added
+
+- Windows 电脑端新增标准 NSIS 安装包，安装时可选择目录，自动创建开始菜单和桌面快捷方式，并注册到 Windows“设置 → 应用”卸载列表。
+- 新增 `deploy/build-windows-installer.ps1`，统一生成版本化 Windows 安装包和 SHA256 校验值。
+- 手机端会话输入框新增系统文件选择与分块上传，文件经中继传到电脑 `下载\CodexLink`，支持把保存路径带入当前会话。
+- Linux 交互式安装会分别询问 Web 管理面板端口和电脑/手机中转服务端口，并检查无效端口、重复端口和已占用端口。
+- 中继新增 `CODEXLINK_RELAY_ADMIN_LISTEN`，管理后台可以使用独立监听端口。
+- 安装脚本新增 `--admin-port`、`--relay-port` 参数，支持非交互指定两个端口。
+
+### Changed
+
+- 管理后台路由与中转路由完全分离；中转端口不再暴露 `/admin` 登录页。
+- 域名 HTTPS 模式下两个端口共用自动申请的证书；HTTP 模式继续明确提示明文风险并推荐域名登录。
+- 安装脚本会自动为新端口写入 UFW/firewalld 规则，并分别做中转与管理面板健康检查。
+
+### Security
+
+- 文件上传按 `4 MB` 分块，单文件上限 `100 MB`；电脑端校验分块顺序、完整大小并清洗文件名，服务器不持久化文件内容。
+- 管理密码和令牌管理接口只监听管理面板端口，减少中转端口的暴露面。
+- 域名 HTTPS 模式下 80 端口只处理 ACME 验证并 308 跳转 HTTPS，不再回落到明文 RPC；HTTPS 响应增加 HSTS。
+- 只有显式设置 `CODEXLINK_RELAY_TRUST_PROXY=true` 时才信任 `X-Forwarded-Proto`；`/healthz` 不再暴露在线设备数量。
+- 手机令牌新增 `read`、`chat`、`files`、`magpie-admin` 权限分级，配对时默认只读；旧令牌自动降为只读。
+- 电脑端令牌首次连接绑定设备 ID，其他设备复用会返回 `403 device_mismatch`；管理后台支持解除绑定。
+- 更换 `CODEXLINK_RELAY_DESKTOP_TOKEN` 时自动替换安装令牌并清除旧绑定。
+- Magpie 管理 API 只允许本机地址，禁用 HTTP 代理和重定向。
+- 文件上传目录增加 `1 GiB` 总计配额，同时最多 4 个上传任务。
+- Android 关闭自动备份；Release 构建必须配置签名。HTTP 明文模式继续兼容，但 App 会持续显示未加密风险提示。
+- Windows 安装包支持 Authenticode 签名，`CODEXLINK_REQUIRE_SIGNATURE=1` 时缺少证书会构建失败；卸载时清理本地加密配置。
+
 ## [1.0.8] - 2026-11-14
 
 ### Added

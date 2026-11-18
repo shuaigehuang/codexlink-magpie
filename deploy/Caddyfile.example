@@ -1,6 +1,14 @@
 # 仅当不使用中继自带 HTTPS 时使用。
-# 将 relay.example.com 换成你的域名，并把 CODEXLINK_RELAY_LISTEN 设为 127.0.0.1:8787。
+# 将 relay.example.com 换成你的域名，并让脚本生成以下本机监听地址：
+#   CODEXLINK_RELAY_LISTEN=127.0.0.1:8787
+#   CODEXLINK_RELAY_ADMIN_LISTEN=127.0.0.1:8080
 relay.example.com {
     encode zstd gzip
-    reverse_proxy 127.0.0.1:8787
+    @admin path /admin /admin/*
+    handle @admin {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8787
+    }
 }

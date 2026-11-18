@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -62,7 +63,7 @@ func TestDesktopRelayPairingAndPing(t *testing.T) {
 	t.Cleanup(service.stopRelay)
 	waitForDesktopRelay(t, service)
 
-	pairing, err := service.CreateRelayPairing(context.Background())
+	pairing, err := service.CreateRelayPairing(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +126,117 @@ func TestDesktopRelayPairingAndPing(t *testing.T) {
 	}
 }
 
+func TestDesktopRelayFileUploadRoundTrip(t *testing.T) {
+	relayServer := startRelayForDesktop(t)
+	service := &CodexLinkService{uploadRoot: t.TempDir()}
+	service.startRelay(relayConfig{
+		URL:        relayServer.URL,
+		Token:      desktopTestToken,
+		DeviceID:   "desktop-file-test",
+		DeviceName: "File Test PC",
+	})
+	t.Cleanup(service.stopRelay)
+	waitForDesktopRelay(t, service)
+
+	pairing, err := service.CreateRelayPairing(context.Background(), []string{relayproto.ScopeRead, relayproto.ScopeFiles})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimBody, _ := json.Marshal(relayproto.PairClaimRequest{Code: pairing.Code, Name: "File Phone"})
+	response, err := http.Post(relayServer.URL+relayproto.PathPairClaim, "application/json", bytes.NewReader(claimBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(response.Body)
+		t.Fatalf("claim status=%d body=%s", response.StatusCode, raw)
+	}
+	var claimed relayproto.PairClaimResponse
+	if err := json.NewDecoder(response.Body).Decode(&claimed); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mobile, _, err := websocket.Dial(ctx,
+		strings.Replace(relayServer.URL, "http://", "ws://", 1)+relayproto.PathMobileConnect,
+		&websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": []string{"Bearer " + claimed.Token}},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mobile.Close(websocket.StatusNormalClosure, "")
+	_ = readRelayTestMessage(t, mobile)
+
+	content := []byte("file sent through the relay")
+	writeRelayTestMessage(t, mobile, relayproto.Message{
+		Type:      relayproto.MessageTypeRPC,
+		RequestID: "file-begin",
+		Method:    "files.begin",
+		Params:    mustJSON(t, map[string]any{"fileName": "手机测试.txt", "size": len(content)}),
+	})
+	beginResult := readRelayTestMessage(t, mobile)
+	if !beginResult.OK {
+		t.Fatalf("file begin failed: %+v", beginResult)
+	}
+	var begin struct {
+		UploadID string `json:"uploadId"`
+	}
+	if err := json.Unmarshal(beginResult.Result, &begin); err != nil {
+		t.Fatal(err)
+	}
+	if begin.UploadID == "" {
+		t.Fatal("missing upload id")
+	}
+
+	writeRelayTestMessage(t, mobile, relayproto.Message{
+		Type:      relayproto.MessageTypeRPC,
+		RequestID: "file-chunk",
+		Method:    "files.chunk",
+		Params: mustJSON(t, map[string]any{
+			"uploadId": begin.UploadID,
+			"index":    0,
+			"data":     base64.StdEncoding.EncodeToString(content),
+		}),
+	})
+	if chunkResult := readRelayTestMessage(t, mobile); !chunkResult.OK {
+		t.Fatalf("file chunk failed: %+v", chunkResult)
+	}
+
+	writeRelayTestMessage(t, mobile, relayproto.Message{
+		Type:      relayproto.MessageTypeRPC,
+		RequestID: "file-finish",
+		Method:    "files.finish",
+		Params:    mustJSON(t, map[string]any{"uploadId": begin.UploadID}),
+	})
+	finishResult := readRelayTestMessage(t, mobile)
+	if !finishResult.OK {
+		t.Fatalf("file finish failed: %+v", finishResult)
+	}
+	var finished finishedFileUpload
+	if err := json.Unmarshal(finishResult.Result, &finished); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(finished.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("saved file = %q, want %q", got, content)
+	}
+}
+
+func mustJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func TestDesktopRelaySessionManagement(t *testing.T) {
 	relayServer := startRelayForDesktop(t)
 	service := &CodexLinkService{}
@@ -137,7 +249,7 @@ func TestDesktopRelaySessionManagement(t *testing.T) {
 	t.Cleanup(service.stopRelay)
 	waitForDesktopRelay(t, service)
 
-	pairing, err := service.CreateRelayPairing(context.Background())
+	pairing, err := service.CreateRelayPairing(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

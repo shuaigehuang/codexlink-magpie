@@ -13,12 +13,13 @@ import (
 )
 
 type sessionRecord struct {
-	TokenHash  string `json:"tokenHash"`
-	SessionID  string `json:"sessionId,omitempty"`
-	DeviceID   string `json:"deviceId"`
-	DeviceName string `json:"deviceName,omitempty"`
-	CreatedAt  string `json:"createdAt,omitempty"`
-	ExpiresAt  string `json:"expiresAt"`
+	TokenHash  string   `json:"tokenHash"`
+	SessionID  string   `json:"sessionId,omitempty"`
+	DeviceID   string   `json:"deviceId"`
+	DeviceName string   `json:"deviceName,omitempty"`
+	CreatedAt  string   `json:"createdAt,omitempty"`
+	ExpiresAt  string   `json:"expiresAt"`
+	Scopes     []string `json:"scopes,omitempty"`
 }
 
 type sessionStore struct {
@@ -63,6 +64,11 @@ func newSessionStore(dataDir string) (*sessionStore, error) {
 			record.CreatedAt = expires.Add(-defaultSessionTTL).UTC().Format(time.RFC3339)
 			migrated = true
 		}
+		normalizedScopes := normalizeMobileScopes(record.Scopes)
+		if len(record.Scopes) != len(normalizedScopes) {
+			record.Scopes = normalizedScopes
+			migrated = true
+		}
 		store.sessions[record.TokenHash] = record
 	}
 	if migrated {
@@ -82,6 +88,7 @@ func (s *sessionStore) Add(record sessionRecord) error {
 	if record.CreatedAt == "" {
 		record.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
+	record.Scopes = normalizeMobileScopes(record.Scopes)
 	s.sessions[record.TokenHash] = record
 	return s.saveLocked()
 }
@@ -134,6 +141,12 @@ func (s *sessionStore) ListDevice(deviceID string) []sessionRecord {
 		}
 		if record.SessionID == "" {
 			record.SessionID = sessionIDForToken(record.TokenHash)
+			s.sessions[key] = record
+			changed = true
+		}
+		normalizedScopes := normalizeMobileScopes(record.Scopes)
+		if len(record.Scopes) != len(normalizedScopes) {
+			record.Scopes = normalizedScopes
 			s.sessions[key] = record
 			changed = true
 		}

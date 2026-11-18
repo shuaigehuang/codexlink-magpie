@@ -89,8 +89,7 @@ bool isInsecureRelay(String relayUrl) {
   final host = uri.host.toLowerCase();
   return host != 'localhost' &&
       host != '127.0.0.1' &&
-      host != '::1' &&
-      !host.startsWith('192.168.');
+      host != '::1';
 }
 
 String normalizePairCode(String raw) {
@@ -661,6 +660,10 @@ String translateRelayError(String raw) {
       return '中继或电脑端版本过旧，请更新后重试';
     case 'bad_request':
       return '请求内容无效';
+    case 'scope_denied':
+      return '手机缺少此操作权限，请在电脑端重新生成配对码并授权';
+    case 'device_mismatch':
+      return '电脑端令牌已绑定其他设备，请在电脑管理面板解绑后再试';
   }
   return text.isEmpty ? '操作失败，请稍后重试' : text;
 }

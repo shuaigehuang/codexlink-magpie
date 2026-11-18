@@ -180,7 +180,7 @@ func (c *Client) Initialize(ctx context.Context) (InitializeResponse, error) {
 		ClientInfo: ClientInfo{
 			Name:    "codexlink",
 			Title:   "CodexLink",
-			Version: "1.0.8",
+			Version: "1.1.0",
 		},
 		Capabilities: InitializeCapabilities{
 			ExperimentalAPI: true,

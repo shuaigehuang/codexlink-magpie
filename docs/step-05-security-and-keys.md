@@ -93,3 +93,22 @@ apps/desktop/CodexLink/bin/codexlink.exe
 3. 实现电脑端主动连接中继，不开放家庭网络端口。
 4. 为中继提供 Linux 一体化安装脚本。
 5. 让手机端通过中继读取会话摘要并提交指令。
+
+## 2026-11-18 安全加固
+
+在原有 DPAPI 和本机管理密钥的基础上，补充了以下限制：
+
+- Magpie 管理 API 只允许 `localhost`、回环地址或本机网卡地址；HTTP 客户端禁用系统代理，
+  且不跟随重定向，防止管理密钥被转发到外部主机。
+- 手机令牌按 `read`、`chat`、`files`、`magpie-admin` 分级授权；WebSocket 和 HTTP RPC
+  都执行方法级校验。新配对默认只读，旧令牌升级后自动降为只读。
+- 电脑端令牌首次连接时绑定设备 ID，其他设备复用会返回 `device_mismatch`；
+  管理后台可查看绑定设备并解除绑定。
+- 文件上传单文件上限 `100 MB`、单块 `4 MB`，上传目录总计 `1 GiB`，同时最多 4 个上传任务。
+- Android 关闭自动备份；Release 构建要求正式签名，未签名时构建失败。
+  HTTP 明文模式继续兼容自建服务器，但界面会持续提示未加密风险。
+- Windows 安装包支持可选 Authenticode 签名；设置 `CODEXLINK_REQUIRE_SIGNATURE=1` 后
+  缺少证书会直接失败。卸载时清理 `relay.dat`、`credentials.dat` 和 `settings.json`。
+
+这些改动不改变 Magpie 密钥只在电脑本机处理的原则：手机、中继和日志仍然不会收到
+Magpie 管理密钥或 Provider Key。

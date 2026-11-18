@@ -36,7 +36,7 @@ func newTestRelay(t *testing.T, pairTTL, sessionTTL time.Duration) (*Server, *ht
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(server.Handler())
+	httpServer := httptest.NewServer(server.CombinedHandler())
 	t.Cleanup(func() {
 		server.Close()
 		httpServer.Close()
@@ -107,6 +107,7 @@ func writeWebSocket(t *testing.T, conn *websocket.Conn, message Message) {
 func connectDesktop(t *testing.T, httpServer *httptest.Server, deviceID string) *websocket.Conn {
 	t.Helper()
 	conn := dialWebSocket(t, wsURL(httpServer, PathDesktopConnect+"?device="+deviceID+"&name=Test+PC"), testDesktopToken)
+	conn.SetReadLimit(maxMessageBytes)
 	hello := readWebSocket(t, conn)
 	if hello.Type != MessageTypeHello || hello.DeviceID != deviceID {
 		t.Fatalf("unexpected desktop hello: %+v", hello)
@@ -116,7 +117,12 @@ func connectDesktop(t *testing.T, httpServer *httptest.Server, deviceID string) 
 
 func createPairCode(t *testing.T, desktop *websocket.Conn) Message {
 	t.Helper()
-	writeWebSocket(t, desktop, Message{Type: MessageTypePair, RequestID: "pair-request"})
+	return createPairCodeWithScopes(t, desktop, nil)
+}
+
+func createPairCodeWithScopes(t *testing.T, desktop *websocket.Conn, scopes []string) Message {
+	t.Helper()
+	writeWebSocket(t, desktop, Message{Type: MessageTypePair, RequestID: "pair-request", Scopes: scopes})
 	message := readWebSocket(t, desktop)
 	if message.Type != MessageTypePaired || message.Code == "" {
 		t.Fatalf("unexpected pair response: %+v", message)
@@ -289,6 +295,9 @@ func TestPairingAndRPCRoundTrip(t *testing.T) {
 	desktop := connectDesktop(t, httpServer, "device-test-01")
 	pair := createPairCode(t, desktop)
 	claimed := claimPairToken(t, httpServer, pair.Code)
+	if len(claimed.Scopes) != 1 || claimed.Scopes[0] != ScopeRead {
+		t.Fatalf("default pairing scopes = %v", claimed.Scopes)
+	}
 
 	secondClaim := claimPair(t, httpServer, pair.Code)
 	if secondClaim.StatusCode != http.StatusGone {
@@ -393,6 +402,82 @@ func TestHTTPMobileRPCRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMobileFileChunkAllowsLargePayload(t *testing.T) {
+	_, httpServer := newTestRelay(t, 0, 0)
+	desktop := connectDesktop(t, httpServer, "device-test-01")
+	pair := createPairCodeWithScopes(t, desktop, []string{ScopeRead, ScopeFiles})
+	claimed := claimPairToken(t, httpServer, pair.Code)
+
+	large := strings.Repeat("A", 1<<20)
+	params, err := json.Marshal(map[string]any{
+		"uploadId": "upload-1",
+		"index":    0,
+		"data":     large,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"method": "files.chunk",
+		"params": json.RawMessage(params),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(params) <= maxRPCParamsBytes {
+		t.Fatalf("test payload is too small: %d", len(params))
+	}
+	if len(params) >= maxFileChunkBytes {
+		t.Fatalf("test payload exceeds file chunk limit: %d", len(params))
+	}
+
+	type httpReply struct {
+		status int
+		body   Message
+		err    error
+	}
+	done := make(chan httpReply, 1)
+	go func() {
+		request, err := http.NewRequest(http.MethodPost, httpServer.URL+PathMobileRPC, bytes.NewReader(body))
+		if err != nil {
+			done <- httpReply{err: err}
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+claimed.Token)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			done <- httpReply{err: err}
+			return
+		}
+		defer response.Body.Close()
+		var message Message
+		if err := json.NewDecoder(response.Body).Decode(&message); err != nil {
+			done <- httpReply{status: response.StatusCode, err: err}
+			return
+		}
+		done <- httpReply{status: response.StatusCode, body: message}
+	}()
+
+	relayed := readWebSocket(t, desktop)
+	if relayed.Method != "files.chunk" || len(relayed.Params) <= maxRPCParamsBytes {
+		t.Fatalf("large file chunk was not relayed: method=%s params=%d", relayed.Method, len(relayed.Params))
+	}
+	writeWebSocket(t, desktop, Message{
+		Type:      MessageTypeRPCResult,
+		RequestID: relayed.RequestID,
+		OK:        true,
+		Result:    json.RawMessage(`{"received":1048576}`),
+	})
+	reply := <-done
+	if reply.err != nil {
+		t.Fatal(reply.err)
+	}
+	if reply.status != http.StatusOK || !reply.body.OK {
+		t.Fatalf("unexpected file chunk reply: status=%d body=%+v", reply.status, reply.body)
+	}
+}
+
 func TestHTTPMobileRPCDesktopOffline(t *testing.T) {
 	_, httpServer := newTestRelay(t, 0, 0)
 	desktop := connectDesktop(t, httpServer, "device-test-01")
@@ -449,6 +534,71 @@ func TestMobileMethodWhitelist(t *testing.T) {
 	relayed := readWebSocket(t, desktop)
 	if relayed.Method != "ping" {
 		t.Fatalf("allowed method was not relayed: %+v", relayed)
+	}
+}
+
+func TestMobileScopeIsEnforced(t *testing.T) {
+	_, httpServer := newTestRelay(t, 0, 0)
+	desktop := connectDesktop(t, httpServer, "device-test-01")
+	pair := createPairCode(t, desktop)
+	claimed := claimPairToken(t, httpServer, pair.Code)
+	mobile := dialWebSocket(t, wsURL(httpServer, PathMobileConnect), claimed.Token)
+	_ = readWebSocket(t, mobile)
+
+	writeWebSocket(t, mobile, Message{
+		Type:      MessageTypeRPC,
+		RequestID: "scope-denied-1",
+		Method:    "threads.send",
+		Params:    json.RawMessage(`{"threadId":"thread-1","text":"hello"}`),
+	})
+	result := readWebSocket(t, mobile)
+	if result.OK || result.RequestID != "scope-denied-1" || result.Error != ErrorScopeDenied {
+		t.Fatalf("read-only token sent a message: %+v", result)
+	}
+
+	chatPair := createPairCodeWithScopes(t, desktop, []string{ScopeRead, ScopeChat})
+	chatClaim := claimPairToken(t, httpServer, chatPair.Code)
+	if len(chatClaim.Scopes) != 2 || chatClaim.Scopes[1] != ScopeChat {
+		t.Fatalf("chat pairing scopes = %v", chatClaim.Scopes)
+	}
+	chatMobile := dialWebSocket(t, wsURL(httpServer, PathMobileConnect), chatClaim.Token)
+	_ = readWebSocket(t, chatMobile)
+	writeWebSocket(t, chatMobile, Message{
+		Type:      MessageTypeRPC,
+		RequestID: "scope-chat-1",
+		Method:    "threads.send",
+		Params:    json.RawMessage(`{"threadId":"thread-1","text":"hello"}`),
+	})
+	relayed := readWebSocket(t, desktop)
+	if relayed.Method != "threads.send" {
+		t.Fatalf("chat-scoped request was not relayed: %+v", relayed)
+	}
+}
+
+func TestDesktopTokenIsBoundToFirstDevice(t *testing.T) {
+	_, httpServer := newTestRelay(t, 0, 0)
+	desktop := connectDesktop(t, httpServer, "device-test-01")
+	pair := createPairCode(t, desktop)
+	_ = claimPairToken(t, httpServer, pair.Code)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, response, err := websocket.Dial(ctx,
+		wsURL(httpServer, PathDesktopConnect+"?device=device-test-02"),
+		&websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": []string{"Bearer " + testDesktopToken}},
+		})
+	if err == nil {
+		t.Fatal("token bound to another device was accepted")
+	}
+	if response == nil || response.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected binding status: %+v", response)
+	}
+
+	crossDevice := desktopManagementRequest(t, httpServer, http.MethodGet,
+		PathDesktopSessions+"?device=device-test-02", nil)
+	if crossDevice.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-device management status = %d", crossDevice.StatusCode)
 	}
 }
 
@@ -594,15 +744,12 @@ func TestDesktopSessionManagement(t *testing.T) {
 		t.Fatalf("unexpected session names: %+v", list.Sessions)
 	}
 
-	crossDevice := revokeMobileSessions(t, httpServer, RevokeSessionsRequest{
+	crossDevice := desktopManagementRequest(t, httpServer, http.MethodPost, PathDesktopRevoke, RevokeSessionsRequest{
 		DeviceID:  "device-test-02",
 		SessionID: byName["Phone A"].ID,
 	})
-	if crossDevice.Revoked != 0 {
-		t.Fatalf("cross-device revoke removed sessions: %+v", crossDevice)
-	}
-	if remaining := listMobileSessions(t, httpServer, "device-test-01"); remaining.Count != 2 {
-		t.Fatalf("cross-device revoke changed sessions: %+v", remaining)
+	if crossDevice.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-device revoke status = %d", crossDevice.StatusCode)
 	}
 
 	mobileA := dialWebSocket(t, wsURL(httpServer, PathMobileConnect), phoneA.Token)
@@ -700,6 +847,9 @@ func TestSessionStoreMigratesLegacySessions(t *testing.T) {
 	wantID := sessionIDForToken(legacy[0].TokenHash)
 	if records[0].SessionID != wantID {
 		t.Fatalf("legacy session id = %q, want %q", records[0].SessionID, wantID)
+	}
+	if len(records[0].Scopes) != 1 || records[0].Scopes[0] != ScopeRead {
+		t.Fatalf("legacy session scopes = %v, want read-only migration", records[0].Scopes)
 	}
 	reloaded, err := newSessionStore(dir)
 	if err != nil {

@@ -2,8 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"log"
-	"net/http"
 	"path/filepath"
 	"strings"
 
@@ -42,12 +40,4 @@ func newAutocertManager(options tlsOptions, dataDir string) (*autocert.Manager, 
 	config.MinVersion = tls.VersionTLS12
 	config.NextProtos = []string{"http/1.1", acme.ALPNProto}
 	return manager, config
-}
-
-func servePlainHTTP(server *http.Server, logger *log.Logger) {
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Printf("HTTP redirect listener unavailable on %s: %v", server.Addr, err)
-		}
-	}()
 }

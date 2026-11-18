@@ -49,6 +49,13 @@ CodexLink relay package
    cd codexlink-relay-linux-$item
    sudo bash ./install.sh --http-public YOUR_SERVER_IP
 
+   The interactive installer asks for two different ports:
+   - Web admin console port (default 8080 for HTTP, 8443 for HTTPS)
+   - Desktop/mobile relay port (default 80 for HTTP, 443 for HTTPS)
+
+   You can skip the prompts and choose ports explicitly:
+   sudo bash ./install.sh --http-public YOUR_SERVER_IP --relay-port 8787 --admin-port 8080
+
    Or, with a filed domain and HTTPS:
    sudo bash ./install.sh --domain relay.example.com --email you@example.com
 
@@ -64,7 +71,8 @@ quick self-hosted test, but the desktop token and conversation traffic are
 not encrypted. Use a filed domain with --domain for production HTTPS.
 --http-dual also uses plaintext HTTP/WS, on both TCP 80 and TCP 443.
 Port 443 in this mode is NOT HTTPS and provides no encryption.
-TCP 80 or 443 must be allowed in the Tencent Cloud security group.
+The admin console uses a separate port and its routes are not exposed on the
+relay port. Allow both selected ports in the Tencent Cloud security group.
 "@ | Set-Content -LiteralPath (Join-Path $resolvedStage "README.txt") -Encoding utf8
 
     $archive = Join-Path $dist "codexlink-relay-linux-$item.tar.gz"

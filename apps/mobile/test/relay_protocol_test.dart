@@ -5,10 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('relay endpoint', () {
     test('normalizes public HTTP and HTTPS addresses', () {
-      expect(
-        normalizeRelayUrl('http://203.0.113.10/'),
-        'http://203.0.113.10',
-      );
+      expect(normalizeRelayUrl('http://203.0.113.10/'), 'http://203.0.113.10');
       expect(
         normalizeRelayUrl('relay.example.com'),
         'https://relay.example.com',
@@ -114,5 +111,20 @@ void main() {
     expect(detail.thread.id, 'thread-1');
     expect(detail.items, hasLength(2));
     expect(detail.items.last.isAgent, isTrue);
+  });
+
+  test('parses uploaded file metadata and upload limits', () {
+    final uploaded = UploadedFile.fromJson({
+      'name': '手机测试.txt',
+      'path': r'C:\Users\me\Downloads\CodexLink\20261114-手机测试.txt',
+      'size': 42,
+      'sha256': 'abc123',
+    });
+    expect(uploaded.name, '手机测试.txt');
+    expect(uploaded.path, contains(r'Downloads\CodexLink'));
+    expect(uploaded.size, 42);
+    expect(uploaded.sha256, 'abc123');
+    expect(maxUploadFileBytes, 100 * 1024 * 1024);
+    expect(defaultUploadChunkBytes, 4 * 1024 * 1024);
   });
 }

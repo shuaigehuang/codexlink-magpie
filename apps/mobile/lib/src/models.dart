@@ -6,6 +6,7 @@ class ConnectionConfig {
     required this.deviceName,
     required this.expiresAt,
     required this.insecure,
+    required this.scopes,
   });
 
   final String relayUrl;
@@ -14,6 +15,7 @@ class ConnectionConfig {
   final String deviceName;
   final String expiresAt;
   final bool insecure;
+  final List<String> scopes;
 
   Map<String, dynamic> toJson() => {
     'relayUrl': relayUrl,
@@ -22,6 +24,7 @@ class ConnectionConfig {
     'deviceName': deviceName,
     'expiresAt': expiresAt,
     'insecure': insecure,
+    'scopes': scopes,
   };
 
   factory ConnectionConfig.fromJson(Map<String, dynamic> json) {
@@ -32,8 +35,11 @@ class ConnectionConfig {
       deviceName: _string(json['deviceName']),
       expiresAt: _string(json['expiresAt']),
       insecure: _bool(json['insecure']),
+      scopes: _stringList(json['scopes']),
     );
   }
+
+  bool hasScope(String scope) => scopes.contains(scope);
 }
 
 class PairClaim {
@@ -42,12 +48,14 @@ class PairClaim {
     required this.deviceId,
     required this.deviceName,
     required this.expiresAt,
+    required this.scopes,
   });
 
   final String token;
   final String deviceId;
   final String deviceName;
   final String expiresAt;
+  final List<String> scopes;
 
   factory PairClaim.fromJson(Map<String, dynamic> json) {
     return PairClaim(
@@ -55,6 +63,7 @@ class PairClaim {
       deviceId: _string(json['deviceId']),
       deviceName: _string(json['deviceName']),
       expiresAt: _string(json['expiresAt']),
+      scopes: _stringList(json['scopes']),
     );
   }
 }
@@ -456,6 +465,32 @@ class SendResult {
       threadId: _string(json['threadId']),
       turnId: _string(json['turnId']),
       status: _string(json['status']),
+    );
+  }
+}
+
+const maxUploadFileBytes = 100 * 1024 * 1024;
+const defaultUploadChunkBytes = 4 * 1024 * 1024;
+
+class UploadedFile {
+  const UploadedFile({
+    required this.name,
+    required this.path,
+    required this.size,
+    required this.sha256,
+  });
+
+  final String name;
+  final String path;
+  final int size;
+  final String sha256;
+
+  factory UploadedFile.fromJson(Map<String, dynamic> json) {
+    return UploadedFile(
+      name: _string(json['name']),
+      path: _string(json['path']),
+      size: _int(json['size']),
+      sha256: _string(json['sha256']),
     );
   }
 }

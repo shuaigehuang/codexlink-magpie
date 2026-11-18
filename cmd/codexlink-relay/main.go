@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,6 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("配置错误: %v", err)
 	}
+	adminListen := strings.TrimSpace(os.Getenv("CODEXLINK_RELAY_ADMIN_LISTEN"))
 
 	service, err := relay.NewServer(cfg)
 	if err != nil {
@@ -36,64 +39,168 @@ func main() {
 	defer service.Close()
 
 	tlsOptions := loadTLSOptions(os.Getenv)
-	var certManager *autocert.Manager
-	var httpServer *http.Server
-	if tlsOptions.Domain != "" {
-		if strings.TrimSpace(os.Getenv("CODEXLINK_RELAY_LISTEN")) == "" {
-			listen = ":443"
-		}
-		manager, cfgTLS := newAutocertManager(tlsOptions, cfg.DataDir)
-		certManager = manager
-		httpServer = &http.Server{
-			Addr:              listen,
-			Handler:           service.Handler(),
-			TLSConfig:         cfgTLS,
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       60 * time.Second,
-		}
-	} else {
-		httpServer = &http.Server{
-			Addr:              listen,
-			Handler:           service.Handler(),
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       60 * time.Second,
-		}
+	if tlsOptions.Domain != "" && strings.TrimSpace(os.Getenv("CODEXLINK_RELAY_LISTEN")) == "" {
+		listen = ":443"
 	}
-	runServer(service, httpServer, certManager, tlsOptions, cfg, listen)
+	httpServer, adminServer, plainServers, certManager, err := buildServers(
+		service, listen, adminListen, tlsOptions, cfg,
+	)
+	if err != nil {
+		log.Fatalf("监听配置错误: %v", err)
+	}
+	runServers(service, httpServer, adminServer, plainServers, certManager, cfg)
 }
 
-func runServer(service *relay.Server, httpServer *http.Server, certManager *autocert.Manager, tlsOptions tlsOptions, cfg relay.Config, listen string) {
-	plainServers := make([]*http.Server, 0, 2)
-	if certManager != nil && tlsOptions.HTTPAddr != "" {
-		auxiliaryServer := &http.Server{
-			Addr:              tlsOptions.HTTPAddr,
-			Handler:           certManager.HTTPHandler(service.Handler()),
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       30 * time.Second,
-		}
-		servePlainHTTP(auxiliaryServer, cfg.Logger)
-		plainServers = append(plainServers, auxiliaryServer)
+func buildServers(service *relay.Server, listen, adminListen string, tlsOptions tlsOptions, cfg relay.Config) (*http.Server, *http.Server, []*http.Server, *autocert.Manager, error) {
+	if err := validateListeners(listen, adminListen, tlsOptions); err != nil {
+		return nil, nil, nil, nil, err
 	}
-	if tlsOptions.ExtraHTTPAddr != "" && tlsOptions.ExtraHTTPAddr != listen &&
-		tlsOptions.ExtraHTTPAddr != tlsOptions.HTTPAddr {
-		extraServer := &http.Server{
-			Addr:              tlsOptions.ExtraHTTPAddr,
-			Handler:           service.Handler(),
+
+	var certManager *autocert.Manager
+	var tlsConfig *tls.Config
+	if tlsOptions.Domain != "" {
+		certManager, tlsConfig = newAutocertManager(tlsOptions, cfg.DataDir)
+	}
+
+	relayHandler := service.Handler()
+	if adminListen == "" {
+		relayHandler = service.CombinedHandler()
+	}
+	httpServer := &http.Server{
+		Addr:              listen,
+		Handler:           relayHandler,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	var adminServer *http.Server
+	if adminListen != "" {
+		adminServer = &http.Server{
+			Addr:              adminListen,
+			Handler:           service.AdminHandler(),
+			TLSConfig:         tlsConfig,
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       60 * time.Second,
 		}
-		servePlainHTTP(extraServer, cfg.Logger)
-		plainServers = append(plainServers, extraServer)
+	}
+
+	plainServers := make([]*http.Server, 0, 2)
+	if certManager != nil && tlsOptions.HTTPAddr != "" {
+		plainServers = append(plainServers, &http.Server{
+			Addr:              tlsOptions.HTTPAddr,
+			Handler:           plaintextRedirectHandler(certManager, tlsOptions.Domain, listen, adminListen),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       30 * time.Second,
+		})
+	}
+	if tlsOptions.ExtraHTTPAddr != "" {
+		handler := relayHandler
+		if certManager != nil {
+			handler = plaintextRedirectHandler(certManager, tlsOptions.Domain, listen, adminListen)
+		}
+		plainServers = append(plainServers, &http.Server{
+			Addr:              tlsOptions.ExtraHTTPAddr,
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		})
+	}
+	return httpServer, adminServer, plainServers, certManager, nil
+}
+
+func validateListeners(listen, adminListen string, tlsOptions tlsOptions) error {
+	addresses := []string{listen}
+	if adminListen != "" {
+		addresses = append(addresses, adminListen)
+	}
+	if tlsOptions.Domain != "" && tlsOptions.HTTPAddr != "" {
+		addresses = append(addresses, tlsOptions.HTTPAddr)
+	}
+	if tlsOptions.ExtraHTTPAddr != "" {
+		addresses = append(addresses, tlsOptions.ExtraHTTPAddr)
+	}
+	seen := make(map[string]string, len(addresses))
+	for _, address := range addresses {
+		key, err := listenerKey(address)
+		if err != nil {
+			return fmt.Errorf("监听地址 %q 无效: %w", address, err)
+		}
+		if previous, ok := seen[key]; ok {
+			return fmt.Errorf("监听地址重复: %s 与 %s", previous, address)
+		}
+		seen[key] = address
+	}
+	return nil
+}
+
+func listenerKey(address string) (string, error) {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return "", err
+	}
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "*"
+	}
+	if number, err := strconv.Atoi(port); err == nil {
+		port = strconv.Itoa(number)
+	}
+	return net.JoinHostPort(strings.ToLower(host), port), nil
+}
+
+func runServers(service *relay.Server, httpServer, adminServer *http.Server, plainServers []*http.Server, certManager *autocert.Manager, cfg relay.Config) {
+	type serveSpec struct {
+		server *http.Server
+		tls    bool
+		label  string
+	}
+	specs := []serveSpec{{
+		server: httpServer,
+		tls:    certManager != nil,
+		label:  "relay",
+	}}
+	if adminServer != nil {
+		specs = append(specs, serveSpec{
+			server: adminServer,
+			tls:    certManager != nil,
+			label:  "admin",
+		})
+	}
+	for _, server := range plainServers {
+		specs = append(specs, serveSpec{server: server, label: "plaintext"})
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	errCh := make(chan error, len(specs))
+	for _, spec := range specs {
+		spec := spec
+		go func() {
+			var err error
+			if spec.tls {
+				err = spec.server.ListenAndServeTLS("", "")
+			} else {
+				err = spec.server.ListenAndServe()
+			}
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("%s listener on %s: %w", spec.label, spec.server.Addr, err)
+			}
+		}()
+	}
+
 	shutdownDone := make(chan struct{})
+	var serveErr error
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case serveErr = <-errCh:
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(shutdownCtx)
+		if adminServer != nil {
+			_ = adminServer.Shutdown(shutdownCtx)
+		}
 		for _, server := range plainServers {
 			_ = server.Shutdown(shutdownCtx)
 		}
@@ -102,24 +209,27 @@ func runServer(service *relay.Server, httpServer *http.Server, certManager *auto
 	}()
 
 	if certManager != nil {
-		cfg.Logger.Printf("relay listening with automatic HTTPS on %s domain=%s data=%s", listen, tlsOptions.Domain, cfg.DataDir)
+		cfg.Logger.Printf("relay listening with automatic HTTPS on %s", httpServer.Addr)
+		if adminServer != nil {
+			cfg.Logger.Printf("admin console listening with automatic HTTPS on %s", adminServer.Addr)
+		}
 	} else {
-		cfg.Logger.Printf("relay listening on %s data=%s", listen, cfg.DataDir)
+		cfg.Logger.Printf("relay listening on %s", httpServer.Addr)
+		if adminServer != nil {
+			cfg.Logger.Printf("admin console listening on %s", adminServer.Addr)
+		}
 	}
 	for _, server := range plainServers {
-		cfg.Logger.Printf("relay also serving plaintext HTTP on %s", server.Addr)
+		if certManager != nil {
+			cfg.Logger.Printf("HTTP redirect listener on %s", server.Addr)
+		} else {
+			cfg.Logger.Printf("relay also serving HTTP on %s", server.Addr)
+		}
 	}
-	var err error
-	if certManager != nil {
-		err = httpServer.ListenAndServeTLS("", "")
-	} else {
-		err = httpServer.ListenAndServe()
-	}
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("中继服务异常退出: %v", err)
-	}
-	if ctx.Err() != nil {
-		<-shutdownDone
+
+	<-shutdownDone
+	if serveErr != nil {
+		log.Fatalf("中继服务异常退出: %v", serveErr)
 	}
 	cfg.Logger.Print("relay stopped")
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +86,61 @@ func TestLoadTLSOptionsExtraHTTPAddress(t *testing.T) {
 	options := loadTLSOptions(func(key string) string { return env[key] })
 	if options.Domain != "" || options.ExtraHTTPAddr != ":443" {
 		t.Fatalf("unexpected plaintext dual-port options: %+v", options)
+	}
+}
+
+func TestValidateListenersRejectsDuplicatePorts(t *testing.T) {
+	err := validateListeners(":8080", "0.0.0.0:8080", tlsOptions{})
+	if err == nil {
+		t.Fatal("duplicate public listener addresses were accepted")
+	}
+	if err := validateListeners(":8080", "0.0.0.0:08080", tlsOptions{}); err == nil {
+		t.Fatal("duplicate listener addresses with leading zeroes were accepted")
+	}
+}
+
+func TestValidateListenersAcceptsSeparatePorts(t *testing.T) {
+	err := validateListeners(":443", ":8443", tlsOptions{
+		Domain:   "relay.example.com",
+		HTTPAddr: ":80",
+	})
+	if err != nil {
+		t.Fatalf("valid listener configuration was rejected: %v", err)
+	}
+}
+
+func TestPlaintextRedirectKeepsAdminOnAdminPort(t *testing.T) {
+	manager, _ := newAutocertManager(tlsOptions{Domain: "relay.example.com"}, t.TempDir())
+	handler := plaintextRedirectHandler(manager, "relay.example.com", ":443", ":8443")
+
+	relayRequest := httptest.NewRequest(http.MethodGet, "http://relay.example.com/v1/pair/claim?x=1", nil)
+	relayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(relayResponse, relayRequest)
+	if relayResponse.Code != http.StatusPermanentRedirect {
+		t.Fatalf("relay redirect status = %d", relayResponse.Code)
+	}
+	if got := relayResponse.Header().Get("Location"); got != "https://relay.example.com/v1/pair/claim?x=1" {
+		t.Fatalf("relay redirect = %q", got)
+	}
+
+	adminRequest := httptest.NewRequest(http.MethodGet, "http://relay.example.com/admin", nil)
+	adminResponse := httptest.NewRecorder()
+	handler.ServeHTTP(adminResponse, adminRequest)
+	if adminResponse.Code != http.StatusPermanentRedirect {
+		t.Fatalf("admin redirect status = %d", adminResponse.Code)
+	}
+	if got := adminResponse.Header().Get("Location"); got != "https://relay.example.com:8443/admin" {
+		t.Fatalf("admin redirect = %q", got)
+	}
+}
+
+func TestPlaintextRedirectUsesConfiguredDomain(t *testing.T) {
+	manager, _ := newAutocertManager(tlsOptions{Domain: "relay.example.com"}, t.TempDir())
+	handler := plaintextRedirectHandler(manager, "relay.example.com", "127.0.0.1:9443", "")
+	request := httptest.NewRequest(http.MethodGet, "http://attacker.example/healthz", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if got := response.Header().Get("Location"); got != "https://relay.example.com:9443/healthz" {
+		t.Fatalf("redirect accepted an untrusted host: %q", got)
 	}
 }

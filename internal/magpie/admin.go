@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -78,8 +79,20 @@ func NewAdminClient(baseURL, secret string) *AdminClient {
 	return &AdminClient{
 		BaseURL:   strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		Secret:    strings.TrimSpace(secret),
-		HTTP:      &http.Client{Timeout: 40 * time.Second},
+		HTTP:      newAdminHTTPClient(40 * time.Second),
 		UserAgent: adminUserAgent,
+	}
+}
+
+func newAdminHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 }
 
@@ -245,8 +258,12 @@ func (c *AdminClient) do(ctx context.Context, method, path string, body any) ([]
 		return nil, errors.New("尚未初始化 Magpie 管理密钥")
 	}
 	base, err := url.Parse(c.BaseURL)
-	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" ||
+		base.User != nil || base.Fragment != "" {
 		return nil, errors.New("Magpie 网关地址无效")
+	}
+	if !isLocalAdminHost(base.Hostname()) {
+		return nil, errors.New("为保护 Magpie 管理密钥，只允许连接本机地址")
 	}
 
 	var reader io.Reader
@@ -258,8 +275,11 @@ func (c *AdminClient) do(ctx context.Context, method, path string, body any) ([]
 		reader = bytes.NewReader(encoded)
 	}
 
-	endpoint := c.BaseURL + adminPath + strings.TrimLeft(path, "/")
-	request, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
+	endpoint := *base
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + adminPath + strings.TrimLeft(path, "/")
+	endpoint.RawPath = ""
+	endpoint.RawQuery = ""
+	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), reader)
 	if err != nil {
 		return nil, fmt.Errorf("创建 Magpie 管理请求失败: %w", err)
 	}
@@ -272,7 +292,18 @@ func (c *AdminClient) do(ctx context.Context, method, path string, body any) ([]
 
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 40 * time.Second}
+		client = newAdminHTTPClient(40 * time.Second)
+	} else {
+		copied := *client
+		copied.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		if transport, ok := copied.Transport.(*http.Transport); ok && transport != nil {
+			safeTransport := transport.Clone()
+			safeTransport.Proxy = nil
+			copied.Transport = safeTransport
+		}
+		client = &copied
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -298,6 +329,40 @@ func (c *AdminClient) do(ctx context.Context, method, path string, body any) ([]
 		return nil, fmt.Errorf("Magpie 管理请求失败 (%s): %s", response.Status, c.sanitizeText(message))
 	}
 	return raw, nil
+}
+
+func isLocalAdminHost(host string) bool {
+	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, address := range addresses {
+		var candidate net.IP
+		switch value := address.(type) {
+		case *net.IPNet:
+			candidate = value.IP
+		case *net.IPAddr:
+			candidate = value.IP
+		}
+		if candidate != nil && candidate.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *AdminClient) sanitizeError(err error) error {

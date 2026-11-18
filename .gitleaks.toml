@@ -1,0 +1,19 @@
+title = "CodexLink secret scanning"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures, documentation examples and local build output"
+paths = [
+  '''(?i)(^|/)internal/magpie/.*_test\.go$''',
+  '''(?i)(^|/)internal/dpapi/.*_test\.go$''',
+  '''(?i)(^|/)cmd/codexlink-relay/main_test\.go$''',
+  '''(?i)(^|/)docs/''',
+  '''(?i)(^|/)README\.md$''',
+  '''(?i)(^|/)dist/''',
+  '''(?i)(^|/)build/''',
+  '''(?i)(^|/)\.toolchains/''',
+  '''(?i)(^|/)apps/mobile/build/''',
+  '''(?i)(^|/)apps/desktop/CodexLink/frontend/node_modules/''',
+]

@@ -830,6 +830,13 @@ export class RelayPairing {
              */
             this["qrDataUrl"] = "";
         }
+        if (!("scopes" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["scopes"] = [];
+        }
 
         Object.assign(this, $$source);
     }
@@ -840,7 +847,11 @@ export class RelayPairing {
      * @returns {RelayPairing}
      */
     static createFrom($$source = {}) {
+        const $$createField4_0 = $$createType12;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("scopes" in $$parsedSource) {
+            $$parsedSource["scopes"] = $$createField4_0($$parsedSource["scopes"]);
+        }
         return new RelayPairing(/** @type {Partial<RelayPairing>} */($$parsedSource));
     }
 }
@@ -886,6 +897,13 @@ export class RelaySession {
              */
             this["active"] = false;
         }
+        if (!("scopes" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["scopes"] = [];
+        }
 
         Object.assign(this, $$source);
     }
@@ -896,7 +914,11 @@ export class RelaySession {
      * @returns {RelaySession}
      */
     static createFrom($$source = {}) {
+        const $$createField5_0 = $$createType12;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("scopes" in $$parsedSource) {
+            $$parsedSource["scopes"] = $$createField5_0($$parsedSource["scopes"]);
+        }
         return new RelaySession(/** @type {Partial<RelaySession>} */($$parsedSource));
     }
 }

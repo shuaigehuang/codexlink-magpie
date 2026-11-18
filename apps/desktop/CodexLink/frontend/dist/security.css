@@ -1,0 +1,70 @@
+.pairing-scopes {
+    display: grid;
+    gap: 8px;
+    margin: 14px 0 16px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: rgba(8, 12, 20, 0.45);
+}
+
+.pairing-scopes-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.pairing-scopes-title span {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.scope-option {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 9px;
+    align-items: start;
+    padding: 8px 9px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease;
+}
+
+.scope-option:hover {
+    background: rgba(124, 140, 255, 0.07);
+    border-color: var(--border);
+}
+
+.scope-option.scope-fixed {
+    cursor: default;
+}
+
+.scope-option input {
+    width: 16px;
+    height: 16px;
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+}
+
+.scope-option span {
+    display: grid;
+    gap: 2px;
+}
+
+.scope-option b {
+    color: var(--text-soft);
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.scope-option small {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.4;
+}

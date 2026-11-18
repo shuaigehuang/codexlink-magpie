@@ -1,0 +1,6 @@
+# Copy this file to key.properties before building a public release.
+# Never commit the real keystore or passwords.
+storeFile=D:/secure/codexlink-release.jks
+storePassword=change-me
+keyAlias=codexlink
+keyPassword=change-me

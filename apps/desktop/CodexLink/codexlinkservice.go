@@ -41,6 +41,10 @@ type CodexLinkService struct {
 	relayPairRequest string
 	relayRPCSem      chan struct{}
 	relayGeneration  uint64
+
+	uploadMu   sync.Mutex
+	uploadRoot string
+	uploads    *fileUploadStore
 }
 
 type Dashboard struct {
@@ -212,6 +216,11 @@ func (s *CodexLinkService) ServiceStartup(ctx context.Context, options applicati
 
 func (s *CodexLinkService) ServiceShutdown() error {
 	s.stopRelay()
+	s.uploadMu.Lock()
+	if s.uploads != nil {
+		s.uploads.Close()
+	}
+	s.uploadMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.client == nil {

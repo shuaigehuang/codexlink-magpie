@@ -13,11 +13,12 @@ import (
 )
 
 var (
-	errTokenNotFound   = errors.New("desktop token not found")
-	errTokenDuplicate  = errors.New("desktop token already exists")
-	errLastToken       = errors.New("the last desktop token cannot be deleted")
-	renameTokenFile    = os.Rename
-	minDesktopTokenLen = 32
+	errTokenNotFound     = errors.New("desktop token not found")
+	errTokenDuplicate    = errors.New("desktop token already exists")
+	errLastToken         = errors.New("the last desktop token cannot be deleted")
+	errDesktopDeviceUsed = errors.New("desktop token is bound to another device")
+	renameTokenFile      = os.Rename
+	minDesktopTokenLen   = 32
 )
 
 type desktopTokenRecord struct {
@@ -28,6 +29,7 @@ type desktopTokenRecord struct {
 	CreatedAt  string `json:"createdAt"`
 	LastUsedAt string `json:"lastUsedAt,omitempty"`
 	Source     string `json:"source,omitempty"`
+	DeviceID   string `json:"deviceId,omitempty"`
 }
 
 type desktopTokenStore struct {
@@ -73,7 +75,29 @@ func newDesktopTokenStore(dataDir, initialToken string) (*desktopTokenStore, err
 		}
 		store.tokens[record.ID] = record
 	}
+	if err := store.rotateInstallerTokenLocked(initialToken); err != nil {
+		return nil, err
+	}
 	return store, nil
+}
+
+func (s *desktopTokenStore) rotateInstallerTokenLocked(token string) error {
+	want := hashToken(token)
+	for id, record := range s.tokens {
+		if record.Source != "installer" {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(record.TokenHash), []byte(want)) == 1 {
+			return nil
+		}
+		record.TokenHash = want
+		record.TokenHint = tokenHint(token)
+		record.DeviceID = ""
+		record.LastUsedAt = ""
+		s.tokens[id] = record
+		return s.saveLocked()
+	}
+	return nil
 }
 
 func (s *desktopTokenStore) Authenticate(token string) (desktopTokenRecord, bool) {
@@ -90,6 +114,34 @@ func (s *desktopTokenStore) Authenticate(token string) (desktopTokenRecord, bool
 		return record, true
 	}
 	return desktopTokenRecord{}, false
+}
+
+func (s *desktopTokenStore) AuthenticateDevice(token, deviceID string) (desktopTokenRecord, error) {
+	if strings.TrimSpace(token) == "" {
+		return desktopTokenRecord{}, errTokenNotFound
+	}
+	want := hashToken(token)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, record := range s.tokens {
+		if subtle.ConstantTimeCompare([]byte(record.TokenHash), []byte(want)) != 1 {
+			continue
+		}
+		if record.DeviceID != "" && record.DeviceID != deviceID {
+			return desktopTokenRecord{}, errDesktopDeviceUsed
+		}
+		if record.DeviceID == "" {
+			record.DeviceID = deviceID
+			s.tokens[id] = record
+			if err := s.saveLocked(); err != nil {
+				record.DeviceID = ""
+				s.tokens[id] = record
+				return desktopTokenRecord{}, err
+			}
+		}
+		return record, nil
+	}
+	return desktopTokenRecord{}, errTokenNotFound
 }
 
 func (s *desktopTokenStore) MarkUsed(id string) error {
@@ -168,6 +220,24 @@ func (s *desktopTokenStore) Delete(id string) (desktopTokenRecord, error) {
 	}
 	delete(s.tokens, id)
 	if err := s.saveLocked(); err != nil {
+		s.tokens[id] = record
+		return desktopTokenRecord{}, err
+	}
+	return record, nil
+}
+
+func (s *desktopTokenStore) UnbindDevice(id string) (desktopTokenRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.tokens[id]
+	if !ok {
+		return desktopTokenRecord{}, errTokenNotFound
+	}
+	previous := record.DeviceID
+	record.DeviceID = ""
+	s.tokens[id] = record
+	if err := s.saveLocked(); err != nil {
+		record.DeviceID = previous
 		s.tokens[id] = record
 		return desktopTokenRecord{}, err
 	}

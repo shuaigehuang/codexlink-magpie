@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -122,6 +123,7 @@ class MobileController extends ChangeNotifier {
         deviceName: claim.deviceName.isEmpty ? name : claim.deviceName,
         expiresAt: claim.expiresAt,
         insecure: isInsecureRelay(normalized),
+        scopes: claim.scopes,
       );
       await _storage.write(key: _configKey, value: jsonEncode(config.toJson()));
       _config = config;
@@ -242,6 +244,82 @@ class MobileController extends ChangeNotifier {
       'text': text,
     });
     return SendResult.fromJson(result);
+  }
+
+  Future<UploadedFile> uploadFile(
+    File file,
+    String fileName, {
+    void Function(double progress)? onProgress,
+  }) async {
+    final relay = _requireRelay();
+    final size = await file.length();
+    if (size <= 0) {
+      throw const RelayException('不能上传空文件');
+    }
+    if (size > maxUploadFileBytes) {
+      throw const RelayException('文件不能超过 100 MB');
+    }
+
+    final begin = await relay.call('files.begin', {
+      'fileName': fileName,
+      'size': size,
+    });
+    final uploadId = begin['uploadId']?.toString() ?? '';
+    if (uploadId.isEmpty) {
+      throw const RelayException('电脑端没有返回上传标识');
+    }
+    final returnedChunkSize = begin['chunkSize'];
+    var chunkSize = returnedChunkSize is int
+        ? returnedChunkSize
+        : int.tryParse(returnedChunkSize?.toString() ?? '') ??
+              defaultUploadChunkBytes;
+    if (chunkSize <= 0 || chunkSize > defaultUploadChunkBytes) {
+      chunkSize = defaultUploadChunkBytes;
+    }
+
+    RandomAccessFile? reader;
+    var completed = false;
+    try {
+      reader = await file.open();
+      var sent = 0;
+      var index = 0;
+      while (sent < size) {
+        final remaining = size - sent;
+        final readSize = remaining < chunkSize ? remaining : chunkSize;
+        final bytes = await reader.read(readSize);
+        if (bytes.isEmpty) {
+          throw const RelayException('读取本地文件时提前结束');
+        }
+        await relay.call('files.chunk', {
+          'uploadId': uploadId,
+          'index': index,
+          'data': base64Encode(bytes),
+        }, const Duration(minutes: 2));
+        sent += bytes.length;
+        index += 1;
+        onProgress?.call(sent / size);
+      }
+      final result = await relay.call('files.finish', {
+        'uploadId': uploadId,
+      }, const Duration(minutes: 2));
+      completed = true;
+      final uploaded = UploadedFile.fromJson(result);
+      if (uploaded.path.isEmpty) {
+        throw const RelayException('电脑端没有返回保存路径');
+      }
+      return uploaded;
+    } finally {
+      await reader?.close();
+      if (!completed) {
+        try {
+          await relay.call('files.cancel', {
+            'uploadId': uploadId,
+          }, const Duration(seconds: 20));
+        } catch (_) {
+          // The original upload error is more useful than a cancellation error.
+        }
+      }
+    }
   }
 
   Future<void> refreshMagpie() async {

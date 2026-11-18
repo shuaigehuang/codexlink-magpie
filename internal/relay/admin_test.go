@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"testing"
@@ -195,6 +196,43 @@ func TestAdminLoginRejectsWrongPassword(t *testing.T) {
 	}
 }
 
+func TestAdminAndRelayHandlersAreIsolated(t *testing.T) {
+	server, _ := newTestRelay(t, 10*time.Minute, 90*24*time.Hour)
+	relayServer := httptest.NewServer(server.Handler())
+	adminServer := httptest.NewServer(server.AdminHandler())
+	t.Cleanup(func() {
+		relayServer.Close()
+		adminServer.Close()
+	})
+
+	relayAdmin, err := http.Get(relayServer.URL + PathAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayAdmin.Body.Close()
+	if relayAdmin.StatusCode != http.StatusNotFound {
+		t.Fatalf("relay port exposed admin status=%d, want %d", relayAdmin.StatusCode, http.StatusNotFound)
+	}
+
+	adminHealth, err := http.Get(adminServer.URL + PathHealth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminHealth.Body.Close()
+	if adminHealth.StatusCode != http.StatusOK {
+		t.Fatalf("admin health status=%d, want %d", adminHealth.StatusCode, http.StatusOK)
+	}
+
+	adminRelay, err := http.Get(adminServer.URL + PathDesktopSessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminRelay.Body.Close()
+	if adminRelay.StatusCode != http.StatusNotFound {
+		t.Fatalf("admin port exposed relay status=%d, want %d", adminRelay.StatusCode, http.StatusNotFound)
+	}
+}
+
 func TestDesktopTokenStorePersistsAndDoesNotReimportInstallerToken(t *testing.T) {
 	const initialToken = "initial-desktop-token-0123456789abcdef"
 	dir := t.TempDir()
@@ -232,6 +270,64 @@ func TestDesktopTokenStorePersistsAndDoesNotReimportInstallerToken(t *testing.T)
 	}
 }
 
+func TestInstallerTokenRotationRevokesOldSecret(t *testing.T) {
+	const oldToken = "old-desktop-token-0123456789abcdef"
+	const newToken = "new-desktop-token-0123456789abcdef"
+	const adminToken = "admin-desktop-token-0123456789abcdef"
+	dir := t.TempDir()
+	store, err := newDesktopTokenStore(dir, oldToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installer, err := store.AuthenticateDevice(oldToken, "device-test-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, adminSecret, err := store.Add("第二台电脑", adminToken)
+	if err != nil || adminSecret != adminToken {
+		t.Fatalf("could not persist an admin token: secret=%q err=%v", adminSecret, err)
+	}
+
+	rotated, err := newDesktopTokenStore(dir, newToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rotated.Authenticate(oldToken); ok {
+		t.Fatal("old installer token remained valid after rotation")
+	}
+	record, err := rotated.AuthenticateDevice(newToken, "device-test-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ID != installer.ID || record.DeviceID != "device-test-02" {
+		t.Fatalf("rotated installer record = %+v", record)
+	}
+	if _, ok := rotated.Authenticate(adminToken); !ok {
+		t.Fatal("rotation removed an independently created admin token")
+	}
+}
+
+func TestAdminCanUnbindDesktopToken(t *testing.T) {
+	const initialToken = "initial-desktop-token-0123456789abcdef"
+	store, err := newDesktopTokenStore(t.TempDir(), initialToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.AuthenticateDevice(initialToken, "device-test-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthenticateDevice(initialToken, "device-test-02"); !errors.Is(err, errDesktopDeviceUsed) {
+		t.Fatalf("second device error = %v", err)
+	}
+	if _, err := store.UnbindDevice(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthenticateDevice(initialToken, "device-test-02"); err != nil {
+		t.Fatal("token remained bound after explicit unbind")
+	}
+}
+
 func TestAdminAddressNormalization(t *testing.T) {
 	got := normalizePublicURLs([]string{
 		"http://Relay.Example.com/",
@@ -242,6 +338,29 @@ func TestAdminAddressNormalization(t *testing.T) {
 	want := []string{"https://relay.example.com", "http://Relay.Example.com"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("normalizePublicURLs() = %v, want %v", got, want)
+	}
+}
+
+func TestForwardedProtoRequiresTrustedProxy(t *testing.T) {
+	server, _ := newTestRelay(t, 10*time.Minute, 90*24*time.Hour)
+	request := httptest.NewRequest(http.MethodGet, "http://relay.example.com/admin", nil)
+	request.Header.Set("X-Forwarded-Proto", "https")
+	if server.requestSecure(request) {
+		t.Fatal("forwarded HTTPS was trusted without proxy configuration")
+	}
+	server.cfg.TrustProxy = true
+	if !server.requestSecure(request) {
+		t.Fatal("forwarded HTTPS was ignored for a configured trusted proxy")
+	}
+}
+
+func TestSecureResponsesSetHSTS(t *testing.T) {
+	server, _ := newTestRelay(t, 10*time.Minute, 90*24*time.Hour)
+	request := httptest.NewRequest(http.MethodGet, "https://relay.example.com/healthz", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if got := response.Header().Get("Strict-Transport-Security"); got == "" {
+		t.Fatal("HTTPS response did not include HSTS")
 	}
 }
 

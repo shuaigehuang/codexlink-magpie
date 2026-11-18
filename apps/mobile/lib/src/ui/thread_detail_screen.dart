@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../mobile_controller.dart';
@@ -30,6 +32,10 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen>
   String? _error;
   bool _loading = true;
   bool _sending = false;
+  bool _uploading = false;
+  double _uploadProgress = 0;
+  String _uploadingFileName = '';
+  UploadedFile? _pendingUpload;
   bool _waitingReply = false;
   bool _showJumpToBottom = false;
   bool _pollingLive = false;
@@ -118,6 +124,73 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen>
     setState(() => _reasoningExpanded[key] = !current);
   }
 
+  Future<void> _pickAndUpload() async {
+    if (_uploading || _sending) {
+      return;
+    }
+    try {
+      final selected = await FilePicker.pickFile();
+      if (selected == null || !mounted) {
+        return;
+      }
+      final selectedPath = selected.path;
+      if (selectedPath == null || selectedPath.isEmpty) {
+        throw const RelayException('无法读取所选文件路径，请重新选择');
+      }
+      final file = File(selectedPath);
+      if (!await file.exists()) {
+        throw const RelayException('无法读取所选文件，请重新选择');
+      }
+      final size = await file.length();
+      if (!mounted) {
+        return;
+      }
+      if (size > maxUploadFileBytes) {
+        showMessage(context, '文件不能超过 100 MB', error: true);
+        return;
+      }
+      final fileName = selected.name.trim().isEmpty
+          ? 'upload.bin'
+          : selected.name.trim();
+      setState(() {
+        _uploading = true;
+        _uploadProgress = 0;
+        _uploadingFileName = fileName;
+      });
+      final uploaded = await widget.controller.uploadFile(
+        file,
+        fileName,
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() => _uploadProgress = progress);
+          }
+        },
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _pendingUpload = uploaded;
+        _uploadProgress = 1;
+      });
+      showMessage(context, '文件已上传到电脑，发送指令时会继续当前会话');
+    } catch (exception) {
+      if (mounted) {
+        showMessage(context, friendlyError(exception), error: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+          _uploadingFileName = '';
+          if (_pendingUpload == null) {
+            _uploadProgress = 0;
+          }
+        });
+      }
+    }
+  }
+
   Future<void> _load({bool scrollToBottom = false}) async {
     if (mounted) {
       setState(() {
@@ -133,7 +206,10 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen>
       setState(() {
         _detail = detail;
         _error = null;
-        _latestTimestamp = _newestTimestamp(detail.items, detail.latestTimestamp);
+        _latestTimestamp = _newestTimestamp(
+          detail.items,
+          detail.latestTimestamp,
+        );
       });
       if (scrollToBottom) {
         _scrollToBottom();
@@ -212,9 +288,15 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen>
 
   Future<void> _send() async {
     final text = _composer.text.trim();
-    if (text.isEmpty || _sending) {
+    final upload = _pendingUpload;
+    if ((text.isEmpty && upload == null) || _sending || _uploading) {
       return;
     }
+    final messageText = upload == null
+        ? text
+        : text.isEmpty
+        ? '手机上传的文件已保存到电脑：${upload.path}\n请查看这个文件。'
+        : '手机上传的文件已保存到电脑：${upload.path}\n\n$text';
     setState(() {
       _sending = true;
       _waitingReply = true;
@@ -225,7 +307,10 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen>
       SendResult? sent;
       while (true) {
         try {
-          sent = await widget.controller.sendMessage(widget.thread.id, text);
+          sent = await widget.controller.sendMessage(
+            widget.thread.id,
+            messageText,
+          );
           break;
         } catch (exception) {
           final busy = exception.toString().contains('thread_busy');
@@ -241,6 +326,12 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen>
         }
       }
       _composer.clear();
+      if (mounted) {
+        setState(() {
+          _pendingUpload = null;
+          _uploadProgress = 0;
+        });
+      }
       if (mounted) {
         showMessage(
           context,
@@ -369,7 +460,22 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen>
               minHeight: 2,
               backgroundColor: Colors.transparent,
             ),
-          _Composer(controller: _composer, sending: _sending, onSend: _send),
+          _Composer(
+            controller: _composer,
+            sending: _sending || _uploading,
+            uploading: _uploading,
+            uploadProgress: _uploadProgress,
+            uploadingFileName: _uploadingFileName,
+            attachedFile: _pendingUpload,
+            onPickFile: _pickAndUpload,
+            onRemoveAttachment: () {
+              setState(() {
+                _pendingUpload = null;
+                _uploadProgress = 0;
+              });
+            },
+            onSend: _send,
+          ),
         ],
       ),
     );
@@ -750,11 +856,23 @@ class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,
     required this.sending,
+    required this.uploading,
+    required this.uploadProgress,
+    required this.uploadingFileName,
+    required this.attachedFile,
+    required this.onPickFile,
+    required this.onRemoveAttachment,
     required this.onSend,
   });
 
   final TextEditingController controller;
   final bool sending;
+  final bool uploading;
+  final double uploadProgress;
+  final String uploadingFileName;
+  final UploadedFile? attachedFile;
+  final VoidCallback onPickFile;
+  final VoidCallback onRemoveAttachment;
   final VoidCallback onSend;
 
   @override
@@ -767,43 +885,189 @@ class _Composer extends StatelessWidget {
           color: Color(0xFF10171E),
           border: Border(top: BorderSide(color: Color(0xFF26313D))),
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: TextField(
-                controller: controller,
-                minLines: 1,
-                maxLines: 5,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  hintText: '发送指令给 Codex…',
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 13,
+            if (uploading || attachedFile != null) ...[
+              _AttachmentPanel(
+                uploading: uploading,
+                progress: uploadProgress,
+                uploadingFileName: uploadingFileName,
+                file: attachedFile,
+                onRemove: onRemoveAttachment,
+              ),
+              const SizedBox(height: 9),
+            ],
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                SizedBox(
+                  width: 50,
+                  height: 54,
+                  child: OutlinedButton(
+                    onPressed: sending ? null : onPickFile,
+                    style: OutlinedButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      side: const BorderSide(color: Color(0xFF344252)),
+                    ),
+                    child: uploading
+                        ? SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.4,
+                              value: uploadProgress <= 0
+                                  ? null
+                                  : uploadProgress,
+                            ),
+                          )
+                        : const Icon(Icons.attach_file_rounded, size: 23),
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 9),
-            SizedBox(
-              width: 54,
-              height: 54,
-              child: FilledButton(
-                onPressed: sending ? null : onSend,
-                style: FilledButton.styleFrom(padding: EdgeInsets.zero),
-                child: sending
-                    ? const SizedBox(
-                        width: 21,
-                        height: 21,
-                        child: CircularProgressIndicator(strokeWidth: 2.4),
-                      )
-                    : const Icon(Icons.arrow_upward_rounded),
-              ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    minLines: 1,
+                    maxLines: 5,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: InputDecoration(
+                      hintText: attachedFile == null
+                          ? '发送指令给 Codex…'
+                          : '补充说明，或直接发送文件…',
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 13,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 54,
+                  height: 54,
+                  child: FilledButton(
+                    onPressed: sending ? null : onSend,
+                    style: FilledButton.styleFrom(padding: EdgeInsets.zero),
+                    child: sending
+                        ? const SizedBox(
+                            width: 21,
+                            height: 21,
+                            child: CircularProgressIndicator(strokeWidth: 2.4),
+                          )
+                        : const Icon(Icons.arrow_upward_rounded),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _AttachmentPanel extends StatelessWidget {
+  const _AttachmentPanel({
+    required this.uploading,
+    required this.progress,
+    required this.uploadingFileName,
+    required this.file,
+    required this.onRemove,
+  });
+
+  final bool uploading;
+  final double progress;
+  final String uploadingFileName;
+  final UploadedFile? file;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final uploaded = file;
+    final percent = (progress * 100).clamp(0, 100).round();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151F28),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF304152)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            uploading ? Icons.cloud_upload_rounded : Icons.check_circle_rounded,
+            size: 24,
+            color: uploading ? const Color(0xFFFFB65C) : brandColor,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  uploading
+                      ? '正在上传到电脑 · $percent%'
+                      : '已上传到电脑 · ${_formatFileSize(uploaded!.size)}',
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  uploading ? uploadingFileName : uploaded!.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    color: Color(0xFFA9B6C4),
+                  ),
+                ),
+                if (!uploading && uploaded != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    uploaded.path,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      height: 1.3,
+                      color: Color(0xFF7F91A3),
+                    ),
+                  ),
+                ],
+                if (uploading) ...[
+                  const SizedBox(height: 7),
+                  LinearProgressIndicator(
+                    minHeight: 4,
+                    value: progress <= 0 ? null : progress,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (!uploading)
+            IconButton(
+              tooltip: '从待发送中移除，电脑上的文件不会删除',
+              onPressed: onRemove,
+              icon: const Icon(Icons.close_rounded, size: 20),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatFileSize(int bytes) {
+  if (bytes >= 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+  if (bytes >= 1024) {
+    return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  }
+  return '$bytes B';
 }

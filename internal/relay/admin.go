@@ -31,6 +31,7 @@ type adminTokenView struct {
 	CreatedAt  string `json:"createdAt"`
 	LastUsedAt string `json:"lastUsedAt,omitempty"`
 	Source     string `json:"source,omitempty"`
+	DeviceID   string `json:"deviceId,omitempty"`
 	Active     bool   `json:"active"`
 }
 
@@ -110,7 +111,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   int(adminSessionTTL.Seconds()),
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   s.requestSecure(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 	s.cfg.Logger.Printf("admin login remote=%s", remoteIP)
@@ -134,7 +135,7 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   s.requestSecure(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 	http.Redirect(w, r, PathAdmin, http.StatusSeeOther)
@@ -171,12 +172,13 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:  record.CreatedAt,
 			LastUsedAt: record.LastUsedAt,
 			Source:     record.Source,
+			DeviceID:   record.DeviceID,
 			Active:     activeByToken[record.ID],
 		})
 	}
 	writeJSON(w, http.StatusOK, adminStateResponse{
 		OK:              true,
-		Secure:          adminRequestSecure(r),
+		Secure:          s.requestSecure(r),
 		ActiveDesktops:  desktopCount,
 		ActiveMobiles:   mobileCount,
 		TokenCount:      len(records),
@@ -229,18 +231,39 @@ func (s *Server) handleAdminTokens(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleAdminTokenDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
+func (s *Server) handleAdminTokenAction(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.requireAdminCSRF(r); !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "登录已失效，请重新登录"})
 		return
 	}
-	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, PathAdmin+"/api/tokens/"))
+	action := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, PathAdmin+"/api/tokens/"))
+	unbind := strings.HasSuffix(action, "/unbind")
+	if unbind {
+		action = strings.TrimSuffix(action, "/unbind")
+	}
+	if (!unbind && r.Method != http.MethodDelete) || (unbind && r.Method != http.MethodPost) {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	id := strings.TrimSpace(action)
 	if !validAdminID(id) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "令牌 ID 无效"})
+		return
+	}
+	if unbind {
+		record, err := s.tokens.UnbindDevice(id)
+		switch {
+		case errors.Is(err, errTokenNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "令牌不存在"})
+			return
+		case err != nil:
+			s.cfg.Logger.Printf("admin unbind token failed id=%s err=%v", id, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "解除设备绑定失败"})
+			return
+		}
+		s.disconnectDesktopToken(id)
+		s.cfg.Logger.Printf("admin unbound desktop token id=%s remote=%s", id, requestIP(r, s.cfg.TrustProxy))
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": record.ID})
 		return
 	}
 	record, err := s.tokens.Delete(id)
@@ -328,7 +351,7 @@ func (s *Server) adminAddresses(r *http.Request) []adminAddressView {
 	values := s.cfg.PublicURLs
 	if len(values) == 0 {
 		scheme := "http"
-		if adminRequestSecure(r) {
+		if s.requestSecure(r) {
 			scheme = "https"
 		}
 		values = []string{scheme + "://" + r.Host}
@@ -392,11 +415,11 @@ func normalizePublicURLs(values []string) []string {
 	return normalized
 }
 
-func adminRequestSecure(r *http.Request) bool {
+func (s *Server) requestSecure(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	return s.cfg.TrustProxy && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
 func validAdminID(id string) bool {
@@ -421,7 +444,7 @@ func (s *Server) renderAdminLogin(w http.ResponseWriter, r *http.Request, messag
 	}
 	_ = adminLoginTemplate.Execute(w, map[string]any{
 		"Error":    message,
-		"Insecure": !adminRequestSecure(r),
+		"Insecure": !s.requestSecure(r),
 	})
 }
 
@@ -435,7 +458,7 @@ func (s *Server) renderAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = adminDashboardTemplate.Execute(w, map[string]any{
 		"CSRFToken": session.CSRFToken,
-		"Insecure":  !adminRequestSecure(r),
+		"Insecure":  !s.requestSecure(r),
 	})
 }
 
@@ -532,8 +555,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:18px;ma
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>创建时间</th><th>最近连接</th><th></th></tr></thead>
-        <tbody id="tokenBody"><tr><td colspan="6" class="empty">正在加载...</td></tr></tbody>
+        <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>绑定设备</th><th>创建时间</th><th>最近连接</th><th></th></tr></thead>
+        <tbody id="tokenBody"><tr><td colspan="7" class="empty">正在加载...</td></tr></tbody>
       </table>
     </div>
     <div class="status" id="statusLine"></div>
@@ -635,22 +658,34 @@ function renderTokens(tokens) {
     badge.textContent = token.active ? '在线' : '未连接';
     state.appendChild(badge);
     row.appendChild(state);
+    row.appendChild(makeCell(token.deviceId ? token.deviceId : '未绑定', 'hint'));
     row.appendChild(makeCell(formatTime(token.createdAt), 'date'));
     row.appendChild(makeCell(formatTime(token.lastUsedAt), 'date'));
     const action = document.createElement('td');
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'danger';
-    button.textContent = '删除';
-    button.addEventListener('click', () => deleteToken(token.id, token.name, token.active));
-    action.appendChild(button);
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:6px;align-items:center';
+    if (token.deviceId) {
+      const unbind = document.createElement('button');
+      unbind.type = 'button';
+      unbind.className = 'copy';
+      unbind.textContent = '解除绑定';
+      unbind.addEventListener('click', () => unbindToken(token.id, token.name));
+      actions.appendChild(unbind);
+    }
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'danger';
+    remove.textContent = '删除';
+    remove.addEventListener('click', () => deleteToken(token.id, token.name, token.active));
+    actions.appendChild(remove);
+    action.appendChild(actions);
     row.appendChild(action);
     body.appendChild(row);
   });
   if (!body.children.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
-    cell.colSpan = 6;
+    cell.colSpan = 7;
     cell.className = 'empty';
     cell.textContent = '暂无令牌';
     row.appendChild(cell);
@@ -692,6 +727,18 @@ async function createToken() {
     setStatus(error.message, 'error');
   } finally {
     button.disabled = false;
+  }
+}
+
+async function unbindToken(id, name) {
+  if (!window.confirm('解除“' + name + '”的设备绑定？使用该令牌的电脑会被立即断开，下次连接时会绑定新的设备 ID。')) return;
+  setStatus('正在解除设备绑定...');
+  try {
+    await api('/admin/api/tokens/' + encodeURIComponent(id) + '/unbind', {method: 'POST'});
+    setStatus('设备绑定已解除。', 'ok');
+    await loadState();
+  } catch (error) {
+    setStatus(error.message, 'error');
   }
 }
 

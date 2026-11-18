@@ -150,7 +150,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 label: '授权到期',
                 value: _dateLabel(config?.expiresAt ?? ''),
               ),
-              const InfoLine(label: 'App 版本', value: '1.0.8'),
+              InfoLine(
+                label: '手机权限',
+                value: _scopeLabels(config?.scopes ?? const []),
+              ),
+              const InfoLine(label: 'App 版本', value: '1.1.0'),
               if (widget.controller.connectionError.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -283,7 +287,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 8),
               const Text(
-                '手机端 1.0.8\n连接你自己电脑上的 Codex 与 Magpie。中继服务器仅转发消息，不保存会话正文或完整密钥。',
+                '手机端 1.1.0\n连接你自己电脑上的 Codex 与 Magpie。中继服务器仅转发消息，不保存会话正文或完整密钥。',
                 style: TextStyle(
                   color: Color(0xFF93A1B0),
                   fontSize: 15,
@@ -320,5 +324,16 @@ class _SettingsPageState extends State<SettingsPage> {
         '${local.day.toString().padLeft(2, '0')} '
         '${local.hour.toString().padLeft(2, '0')}:'
         '${local.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _scopeLabels(List<String> scopes) {
+    const labels = {
+      'read': '查看会话',
+      'chat': '发送指令',
+      'files': '上传文件',
+      'magpie-admin': 'Magpie 管理',
+    };
+    final values = scopes.map((scope) => labels[scope] ?? scope).toList();
+    return values.isEmpty ? '仅查看（旧版令牌）' : values.join(' · ');
   }
 }
