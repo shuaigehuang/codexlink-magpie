@@ -89,7 +89,7 @@ class _SettingsPageState extends State<SettingsPage> {
         if (widget.controller.insecure) ...[
           const WarningCard(
             title: '安全提醒：连接未加密',
-            message: '当前服务器使用 HTTP 明文。登录令牌、对话内容、远程指令和 Magpie 完整密钥都可能被网络中间人截获。仅建议在可信网络中临时使用。\n\n推荐做法：准备一个已备案域名，解析到腾讯云服务器，在电脑端和手机端改用 https:// 域名，并重新部署 HTTPS 中继。',
+            message: '当前服务器使用 HTTP 明文。登录令牌、对话内容、远程指令和 Magpie 完整密钥都可能被网络中间人截获。仅建议在可信网络中临时使用。\n\n推荐做法：准备一个已备案域名，解析到中继服务器，在电脑端和手机端改用 https:// 域名，并重新部署 HTTPS 中继。',
           ),
           const SizedBox(height: 14),
         ],
@@ -154,7 +154,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 label: '手机权限',
                 value: _scopeLabels(config?.scopes ?? const []),
               ),
-              const InfoLine(label: 'App 版本', value: '1.1.0'),
+              const InfoLine(label: 'App 版本', value: '1.2.1'),
               if (widget.controller.connectionError.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -287,7 +287,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 8),
               const Text(
-                '手机端 1.1.0\n连接你自己电脑上的 Codex 与 Magpie。中继服务器仅转发消息，不保存会话正文或完整密钥。',
+                '手机端 1.2.1\n连接你自己电脑上的 Codex 与 Magpie。中继服务器仅转发消息，不保存会话正文或完整密钥。',
                 style: TextStyle(
                   color: Color(0xFF93A1B0),
                   fontSize: 15,

@@ -228,7 +228,7 @@ function renderOverview(dashboard) {
             iconName: "server",
             label: "RELAY",
             value: relay.connected ? "已连接" : (relay.configured ? "重连中" : "未配置"),
-            detail: relay.state || "腾讯云中继",
+            detail: relay.state || "云端中继",
             tone: relay.connected ? "good" : "muted",
             foot: relay.url || relay.detail || "在设备配对页配置",
         }),
@@ -327,7 +327,7 @@ function renderRelayBrief(relay) {
     const glyph = node("span", "relay-glyph");
     glyph.appendChild(icon("server"));
     const copy = node("div");
-    copy.append(node("span", "panel-kicker", "REMOTE TUNNEL"), node("h3", "", "腾讯云中继"));
+    copy.append(node("span", "panel-kicker", "REMOTE TUNNEL"), node("h3", "", "云端中继"));
     const chip = node("span", `status-chip ${relay.connected ? "success" : relay.configured ? "warning" : ""}`,
         relay.connected ? "已连接" : relay.configured ? "重连中" : "未配置");
     top.append(glyph, copy, chip);
@@ -1589,7 +1589,7 @@ function renderDiagnostics(dashboard) {
         },
         {
             tone: dashboard.relay?.connected ? "good" : "muted",
-            title: "腾讯云中继",
+            title: "云端中继",
             detail: dashboard.relay?.detail || "中继连接尚未配置。",
             meta: dashboard.relay?.url || "Relay API / 未配置",
         },
