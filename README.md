@@ -9,6 +9,17 @@ CodexLink 由三部分组成：Windows 电脑端、Android 手机端，以及部
 
 > **安全提示**：请优先使用已备案域名 + HTTPS。项目保留 HTTP 明文模式用于临时测试，但明文模式下电脑端密钥、对话内容、远程指令和 Magpie 管理结果都可能被公网中间人截获。详见 [安全模型](docs/step-05-security-and-keys.md)。
 
+## 两种部署方案
+
+先选中继方案，再按对应的小白教程一步步做。两种方案功能一致，电脑端和手机端用法完全相同。
+
+| 方案 | 费用 | 适合谁 | 小白教程 |
+| --- | --- | --- | --- |
+| Cloudflare Workers | 免费（Free 套餐） | 不想买服务器、不想维护 Linux；接受由 Cloudflare 转发 | [Cloudflare Workers 中继：电脑小白部署指南](docs/cloudflare-deploy-beginner.md) |
+| 自有 Linux 服务器 | 服务器费用 | 想自己掌控中继和数据；推荐腾讯云 Ubuntu | [云服务器中继：电脑小白部署指南（腾讯云 Ubuntu）](docs/cloud-server-deploy-beginner.md) |
+
+Cloudflare 方案不需要买服务器，部署最快；自有服务器方案不依赖第三方中继，但需要自己维护系统和证书。没有域名时两种方案都能先跑通，但都只建议临时测试。
+
 ## 功能
 
 - **远程下达指令**：手机可以在电脑已有会话中继续对话；电脑正在执行任务时，指令会排队并使用同一会话继续，不会另开新会话或中断当前任务。
@@ -50,9 +61,9 @@ cd deploy/cloudflare
 node scripts/install.mjs
 ```
 
-Windows 也可以直接运行 `deploy\cloudflare\install.cmd`。脚本会自动创建 D1、
-应用迁移、部署 Worker，并输出管理面板地址。Cloudflare 自动提供 HTTPS/WSS，
-不产生付费套餐费用。
+Windows 可以直接双击 `deploy\cloudflare\install.cmd`，按提示粘贴 API Token 和
+可选域名，不需要手动设置环境变量。脚本会自动创建 D1、应用迁移、部署 Worker，
+并输出管理面板地址。Cloudflare 自动提供 HTTPS/WSS，不产生付费套餐费用。
 
 `workers.dev` 在中国大陆可能被 DNS 污染，建议给 Worker 绑定自己的域名：
 
@@ -60,11 +71,19 @@ Windows 也可以直接运行 `deploy\cloudflare\install.cmd`。脚本会自动�
 node scripts/install.mjs --custom-domain relay.example.com
 ```
 
+第一次接触 Cloudflare、或者完全不想敲命令，请直接看：
+
+[Cloudflare Workers 中继：电脑小白部署指南](docs/cloudflare-deploy-beginner.md)
+
 完整说明见 [deploy/cloudflare/README.md](deploy/cloudflare/README.md)。
 
 ### 1. 部署中继
 
 准备一台 Linux 服务器和已解析到服务器的域名：
+
+第一次接触 Linux 服务器、或者完全不想查命令，请直接看：
+
+[云服务器中继：电脑小白部署指南（腾讯云 Ubuntu）](docs/cloud-server-deploy-beginner.md)
 
 ```bash
 tar -xzf codexlink-relay-linux-amd64.tar.gz

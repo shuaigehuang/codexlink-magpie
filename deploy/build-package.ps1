@@ -41,6 +41,10 @@ foreach ($item in $arches) {
 
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "install.sh") -Destination $resolvedStage
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Caddyfile.example") -Destination $resolvedStage
+    $guideSource = Join-Path $root "docs\cloud-server-deploy-beginner.md"
+    if (Test-Path -LiteralPath $guideSource) {
+        Copy-Item -LiteralPath $guideSource -Destination (Join-Path $resolvedStage "GUIDE-ZH.md") -Force
+    }
     @"
 CodexLink relay package
 =======================
@@ -77,6 +81,9 @@ not encrypted. Use a filed domain with --domain for production HTTPS.
 Port 443 in this mode is NOT HTTPS and provides no encryption.
 The admin console uses a separate port and its routes are not exposed on the
 relay port. Allow both selected ports in the Tencent Cloud security group.
+
+Beginner guide (Chinese): GUIDE-ZH.md
+Full documentation: https://github.com/shuaigehuang/codexlink-magpie
 "@ | Set-Content -LiteralPath (Join-Path $resolvedStage "README.txt") -Encoding utf8
 
     $archive = Join-Path $dist "codexlink-relay-linux-$item.tar.gz"

@@ -154,7 +154,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 label: '手机权限',
                 value: _scopeLabels(config?.scopes ?? const []),
               ),
-              const InfoLine(label: 'App 版本', value: '1.2.1'),
+              const InfoLine(label: 'App 版本', value: '1.2.2'),
               if (widget.controller.connectionError.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -287,7 +287,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 8),
               const Text(
-                '手机端 1.2.1\n连接你自己电脑上的 Codex 与 Magpie。中继服务器仅转发消息，不保存会话正文或完整密钥。',
+                '手机端 1.2.2\n连接你自己电脑上的 Codex 与 Magpie。中继服务器仅转发消息，不保存会话正文或完整密钥。',
                 style: TextStyle(
                   color: Color(0xFF93A1B0),
                   fontSize: 15,

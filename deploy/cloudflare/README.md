@@ -1,5 +1,9 @@
 # CodexLink Cloudflare Workers 中继
 
+> 第一次部署、或者不想看技术细节？请先阅读
+> [Cloudflare Workers 中继：电脑小白部署指南](https://github.com/shuaigehuang/codexlink-magpie/blob/main/docs/cloudflare-deploy-beginner.md)。
+> 下载的压缩包里也附带了一份 `GUIDE-ZH.md`。
+
 把 CodexLink 的 Go 中继迁移到 Cloudflare Workers + D1，使用 Workers 免费版。
 电脑端和手机端仍使用原有协议，只需把中继地址改成 Worker 地址。
 
@@ -42,6 +46,11 @@ My Profile → API Tokens → Create Token → Custom token
 ```
 
 ### Windows
+
+最简单的方式：直接双击 `install.cmd`，按提示粘贴 API Token，
+再选择是否填写自定义域名。不需要手动设置环境变量。
+
+也可以使用命令行：
 
 ```powershell
 $env:CLOUDFLARE_API_TOKEN = "你的 API Token"

@@ -3,6 +3,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { unlinkSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 import {
   chmod,
   readFile,
@@ -16,6 +17,9 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.dirname(path.dirname(root));
 const args = parseArgs(process.argv.slice(2));
+const interactive = Boolean(process.stdin.isTTY)
+  && !args["no-prompt"]
+  && process.argv.slice(2).length === 0;
 
 if (args.help) {
   printHelp();
@@ -37,10 +41,31 @@ process.on("exit", () => {
   }
 });
 
-const apiToken = (args["api-token"] || process.env.CLOUDFLARE_API_TOKEN || await readTokenFile()).trim();
+let apiToken = (args["api-token"] || process.env.CLOUDFLARE_API_TOKEN || await readTokenFile()).trim();
+let customDomain = normalizeHostname(args["custom-domain"] || "");
+
+if (interactive) {
+  if (!apiToken) {
+    console.log("");
+    console.log("第一次部署需要 Cloudflare API Token。");
+    console.log("创建方法见 README.md，或 GitHub 仓库 docs/cloudflare-deploy-beginner.md。");
+    apiToken = (await promptHidden("请粘贴 Cloudflare API Token（输入时不会显示）: ")).trim();
+  }
+  if (!customDomain) {
+    const answer = (await promptLine(
+      "可选：输入已接入 Cloudflare 的域名（如 relay.example.com），直接回车跳过: ",
+    )).trim();
+    if (answer) {
+      customDomain = normalizeHostname(answer);
+    }
+  }
+  console.log("");
+}
+
 if (!apiToken) {
   fail([
     "缺少 Cloudflare API Token。",
+    "Windows 用户可以直接双击 install.cmd，按提示粘贴 Token。",
     "推荐设置环境变量 CLOUDFLARE_API_TOKEN，或使用 --api-token-file 指定文件。",
     "Token 需要 Workers Scripts:Edit 与 D1:Edit 权限。",
   ].join("\n"));
@@ -61,7 +86,6 @@ if (!accountId) {
 const workerName = sanitizeWorkerName(args["worker-name"] || state.workerName || "codexlink-relay");
 const databaseName = sanitizeDatabaseName(args["db-name"] || state.dbName || workerName);
 const publicUrl = normalizePublicUrl(args["public-url"] || state.publicUrl || "");
-const customDomain = normalizeHostname(args["custom-domain"] || "");
 const skipCheck = Boolean(args["skip-check"]);
 const adminPassword = (
   args["admin-password"]
@@ -509,6 +533,7 @@ CodexLink Cloudflare 一键部署
   --admin-password <value>    管理面板密码；未提供则自动生成
   --reset-admin-password      重新生成管理密码
   --skip-check                跳过部署后的公网健康检查
+  --no-prompt                 不显示交互式提示（适合自动化脚本）
   --help                      显示帮助
 
 Token 权限:
@@ -524,6 +549,62 @@ function log(message) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function promptLine(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } catch (error) {
+    if (error?.code === "ABORT_ERR") {
+      console.log("\n已取消。");
+      process.exit(130);
+    }
+    throw error;
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptHidden(question) {
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+  stdout.write(question);
+  return new Promise((resolve) => {
+    let value = "";
+    const wasRaw = Boolean(stdin.isRaw);
+    stdin.setRawMode(true);
+    stdin.resume();
+    const cleanup = () => {
+      stdin.removeListener("data", onData);
+      stdin.setRawMode(wasRaw);
+      stdin.pause();
+      stdout.write("\n");
+    };
+    const onData = (chunk) => {
+      for (const char of chunk.toString("utf8")) {
+        if (char === "\u0003") {
+          cleanup();
+          process.exit(130);
+        }
+        if (char === "\r" || char === "\n") {
+          cleanup();
+          resolve(value);
+          return;
+        }
+        if (char === "\u007f" || char === "\b") {
+          if (value.length > 0) {
+            value = value.slice(0, -1);
+            stdout.write("\b \b");
+          }
+          continue;
+        }
+        value += char;
+        stdout.write("*");
+      }
+    };
+    stdin.on("data", onData);
+  });
 }
 
 function fail(message) {

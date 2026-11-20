@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.2.0"
+    [string]$Version = "1.2.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +50,11 @@ if ($LASTEXITCODE -ge 8) {
     throw "robocopy failed with exit code $LASTEXITCODE"
 }
 
+$guideSource = Join-Path $root "docs\cloudflare-deploy-beginner.md"
+if (Test-Path -LiteralPath $guideSource) {
+    Copy-Item -LiteralPath $guideSource -Destination (Join-Path $resolvedStage "GUIDE-ZH.md") -Force
+}
+
 $guide = @"
 CodexLink Cloudflare Workers relay $Version
 ============================================
@@ -74,6 +79,7 @@ The installer creates the D1 database, applies migrations, deploys the
 Worker, then prints the relay URL and admin console address.
 
 Full documentation: README.md
+Beginner guide (Chinese): GUIDE-ZH.md
 "@
 Set-Content -LiteralPath (Join-Path $resolvedStage "QUICKSTART.txt") -Value $guide -Encoding utf8
 
