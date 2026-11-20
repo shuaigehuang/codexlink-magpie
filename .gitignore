@@ -25,6 +25,9 @@ relay.dat
 
 # Toolchains and build caches
 .toolchains/
+/environment/
+.wrangler/
+.kotlin/
 .task/
 .wails/
 node_modules/

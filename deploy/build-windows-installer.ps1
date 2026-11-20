@@ -6,6 +6,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
+$environmentScript = Join-Path $root "environment.ps1"
+if (Test-Path -LiteralPath $environmentScript) {
+    . $environmentScript
+}
 $desktopDir = Join-Path $root "apps\desktop\CodexLink"
 $infoPath = Join-Path $desktopDir "build\windows\info.json"
 $info = Get-Content -LiteralPath $infoPath -Raw | ConvertFrom-Json

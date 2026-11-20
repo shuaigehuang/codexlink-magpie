@@ -1,0 +1,26 @@
+name = "__WORKER_NAME__"
+main = "src/index.ts"
+compatibility_date = "2026-11-19"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "__D1_NAME__"
+database_id = "__D1_ID__"
+
+[[durable_objects.bindings]]
+name = "DEVICE_ROOM"
+class_name = "DeviceRoom"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DeviceRoom", "RateLimiter"]
+
+[vars]
+PUBLIC_URL = ""
+SESSION_TTL_DAYS = "90"
+PAIR_TTL_MINUTES = "10"

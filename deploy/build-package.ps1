@@ -5,6 +5,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+$environmentScript = Join-Path $root "environment.ps1"
+if (Test-Path -LiteralPath $environmentScript) {
+    . $environmentScript
+}
 $dist = Join-Path $root "dist"
 $go = Join-Path $root ".toolchains\go\bin\go.exe"
 if (-not (Test-Path -LiteralPath $go)) {

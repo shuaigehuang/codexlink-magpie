@@ -1,0 +1,9 @@
+wrangler.toml
+.wrangler/
+node_modules/
+.dev.vars
+.secrets.json
+.install-state.json
+.admin-password
+import-data/
+*.log

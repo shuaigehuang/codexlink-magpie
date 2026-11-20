@@ -40,6 +40,28 @@ flowchart LR
 
 ## 快速开始
 
+### Cloudflare Workers 免费部署（可选）
+
+不想维护 Linux 服务器时，可以把中继部署到 Cloudflare Workers 免费版：
+
+```bash
+export CLOUDFLARE_API_TOKEN="你的 API Token"
+cd deploy/cloudflare
+node scripts/install.mjs
+```
+
+Windows 也可以直接运行 `deploy\cloudflare\install.cmd`。脚本会自动创建 D1、
+应用迁移、部署 Worker，并输出管理面板地址。Cloudflare 自动提供 HTTPS/WSS，
+不产生付费套餐费用。
+
+`workers.dev` 在中国大陆可能被 DNS 污染，建议给 Worker 绑定自己的域名：
+
+```bash
+node scripts/install.mjs --custom-domain relay.example.com
+```
+
+完整说明见 [deploy/cloudflare/README.md](deploy/cloudflare/README.md)。
+
 ### 1. 部署中继
 
 准备一台 Linux 服务器和已解析到服务器的域名：
@@ -135,6 +157,17 @@ sudo bash ./install.sh --http-dual YOUR_SERVER_IP
 | NSIS | 3.13+，构建 Windows 安装包 |
 | Linux 中继 | systemd、curl，可选域名和 80/443 端口 |
 
+项目所需的 SDK、构建缓存和签名资料集中放在项目根目录下的 `environment/`。
+首次打开新的 PowerShell 终端时，先加载项目环境：
+
+```powershell
+. .\environment.ps1
+```
+
+`deploy/build-package.ps1`、`deploy/build-windows-installer.ps1` 和
+`deploy/build-mobile.ps1` 会自动加载该环境。`environment/` 已加入 `.gitignore`，
+其中包含签名密钥和部署密钥，不能提交到 Git。
+
 ### 电脑端
 
 ```powershell
@@ -175,14 +208,10 @@ wails3 task common:generate:bindings
 ### 手机端
 
 ```bash
-cd apps/mobile
-flutter pub get
-flutter analyze
-flutter test
-flutter build apk --release
+pwsh ./deploy/build-mobile.ps1
 ```
 
-产物位于 `apps/mobile/build/app/outputs/flutter-apk/app-release.apk`。
+产物会复制到 `dist/codexlink-mobile.apk`，并生成 SHA256 校验文件。
 Release 构建必须配置正式签名（`android/key.properties` 或 `CODEXLINK_ANDROID_*` 环境变量），
 未签名时会直接失败。HTTP 明文模式仍可使用，App 会显示未加密风险提示；
 正式使用请为中继配置域名和 HTTPS。

@@ -1,0 +1,20 @@
+{
+  "name": "codexlink-cloudflare-relay",
+  "private": true,
+  "version": "1.2.0",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "install-relay": "node scripts/install.mjs",
+    "import-go-data": "node scripts/import-go-data.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261120.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.165.0",
+    "ws": "^8.23.0"
+  }
+}

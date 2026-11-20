@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-20
+
+### Added
+
+- 新增 Cloudflare Workers 免费版中继，使用 Workers + D1 + Durable Objects，
+  不需要维护 Linux 服务器，自动提供 HTTPS/WSS。
+- 新增 `deploy/cloudflare` 一键部署脚本：自动创建 D1、应用迁移、生成配置、
+  上传密钥、部署 Worker，并输出管理面板地址和管理密码。
+- 新增 Cloudflare 管理面板，支持创建、解绑、删除电脑令牌，查看在线电脑，
+  查看并撤销手机授权，复制服务器地址。
+- 新增 `--custom-domain`，可在同一个 Cloudflare 账号内自动创建 DNS 记录并
+  绑定自定义域名，规避 `workers.dev` 在中国大陆的 DNS 污染。
+- 新增 Cloudflare 端到端测试脚本，覆盖配对、手机 WebSocket/HTTP 指令、
+  4 MB 文件分片和手机令牌管理。
+- 新增旧 Go 中继数据导入脚本，可迁移电脑令牌哈希和手机授权。
+- 新增 `deploy/build-cloudflare-package.ps1`，生成可随 Release 发布的
+  Cloudflare 一键部署压缩包。
+
+### Changed
+
+- Cloudflare WebSocket 使用 Hibernation，RPC 等待队列持久化到 Durable Object
+  存储，并通过 alarm 清理超时请求，避免休眠后丢失指令。
+- 部署脚本在健康检查失败时仍保留部署结果，明确提示可能是本地 DNS 无法解析，
+  而不是 Worker 部署失败。
+
+### Security
+
+- Cloudflare 中继只保存电脑令牌和手机令牌的 SHA-256 哈希。
+- 删除或解绑电脑令牌时同步撤销该电脑关联的手机授权并断开连接。
+- 手机只能调用权限白名单内的 Codex 与 Magpie 方法。
+- 管理面板使用 HMAC 签名 HttpOnly Cookie 和 CSRF 校验。
+- API Token、管理密码、Cookie 密钥和安装状态均不进入 Git。
+
 ## [1.1.0] - 2026-11-18
 
 ### Added
